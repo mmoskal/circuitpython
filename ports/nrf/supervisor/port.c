@@ -45,6 +45,7 @@
 #include "common-hal/busio/I2C.h"
 #include "common-hal/busio/SPI.h"
 #include "common-hal/busio/UART.h"
+#include "common-hal/busio/JACDAC.h"
 #include "common-hal/pulseio/PWMOut.h"
 #include "common-hal/pulseio/PulseOut.h"
 #include "common-hal/pulseio/PulseIn.h"
@@ -176,6 +177,7 @@ void reset_port(void) {
     i2c_reset();
     spi_reset();
     uart_reset();
+    jacdac_reset();
 #endif
 
 #if CIRCUITPY_NEOPIXEL_WRITE

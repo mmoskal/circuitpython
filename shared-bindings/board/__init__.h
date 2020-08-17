@@ -45,4 +45,8 @@ mp_obj_t common_hal_board_get_uart(void);
 mp_obj_t common_hal_board_create_uart(void);
 MP_DECLARE_CONST_FUN_OBJ_0(board_uart_obj);
 
+mp_obj_t common_hal_board_get_jacdac(void);
+mp_obj_t common_hal_board_create_jacdac(void);
+MP_DECLARE_CONST_FUN_OBJ_0(board_jacdac_obj);
+
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H

@@ -30,6 +30,7 @@
 #include "shared-bindings/microcontroller/Pin.h"
 #include "shared-bindings/util.h"
 
+#include "lib/utils/buffer_helper.h"
 #include "lib/utils/context_manager_helpers.h"
 #include "lib/utils/interrupt_char.h"
 
@@ -59,20 +60,21 @@ STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, 
     // https://github.com/adafruit/circuitpython/issues/1056)
     busio_jacdac_obj_t *self = m_new_ll_obj(busio_jacdac_obj_t);
     self->base.type = &busio_jacdac_type;
+
+    enum { ARG_pin };
     static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_tx, MP_ARG_OBJ, {.u_obj = mp_const_none} },
-        { MP_QSTR_receiver_buffer_size, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 10} }
+        { MP_QSTR_pin, MP_ARG_OBJ, {.u_obj = mp_const_none} },
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
-    const mcu_pin_obj_t* tx = validate_obj_is_free_pin_or_none(args[ARG_tx].u_obj);
+    const mcu_pin_obj_t* pin = validate_obj_is_free_pin_or_none(args[ARG_pin].u_obj);
 
-    if ( (tx == NULL)) {
-        mp_raise_ValueError(translate("tx and rx cannot both be None"));
+    if ( (pin == NULL)) {
+        mp_raise_ValueError(translate("pin can not be None"));
     }
 
-    common_hal_busio_jacdac_construct(self, tx, args[ARG_receiver_buffer_size].u_int, NULL, false);
+    common_hal_busio_jacdac_construct(self, pin);
     return (mp_obj_t)self;
 }
 
@@ -132,31 +134,105 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(busio_jacdac___exit___obj, 4, 4, busi
 //|
 
 // These three methods are used by the shared stream methods.
-STATIC mp_uint_t busio_jacdac_read(mp_obj_t self_in, void *buf_in) {
-    STREAM_DEBUG("busio_uart_read stream %d\n", size);
+/*
+STATIC mp_uint_t busio_jacdac_receive(mp_obj_t self_in, void *buf_in, mp_uint_t len) {
     busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
     check_for_deinit(self);
-    byte *buf = buf_in;
-    return common_hal_busio_jacdac_read(self, buf);
+    uint32_t *buf = buf_in;
+    return common_hal_busio_jacdac_receive(self, buf, len);
 }
+*/
+/*
+STATIC mp_uint_t busio_jacdac_send(mp_obj_t self_in, const void *buf_in, mp_uint_t len) {
+    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
+    check_for_deinit(self);
+    const uint32_t* buf = buf_in;
+    return common_hal_busio_jacdac_send(self, buf, len);
+}
+*/
+/*
+STATIC mp_obj_t busio_jacdac_send(mp_obj_t self_in, mp_uint_t *buf_in, mp_uint_t len) {
+    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
+    check_for_deinit(self);
+    const uint32_t* buf = buf_in;
+    return MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_send(self, buf, len));
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 3, busio_jacdac_send);
+*/
 
-STATIC mp_uint_t busio_jacdac_send(mp_obj_t self_in, const void *buf_in) {
-    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
+
+
+
+STATIC mp_obj_t busio_jacdac_send(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_buffer, ARG_start, ARG_end };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_buffer,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+        { MP_QSTR_start,      MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_end,        MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = INT_MAX} },
+    };
+    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(pos_args[0]);
     check_for_deinit(self);
-    const byte *buf = buf_in;
-    return common_hal_busio_jacdac_write(self, buf);
+
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    mp_buffer_info_t bufinfo;
+    mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_READ);
+    int32_t start = args[ARG_start].u_int;
+    size_t length = bufinfo.len;
+    normalize_buffer_bounds(&start, args[ARG_end].u_int, &length);
+
+    if (length == 0) {
+        return mp_const_none;
+    }
+
+    return MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_send(self, ((uint32_t*)bufinfo.buf) + start, length));
 }
+MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 2, busio_jacdac_send);
+
+
+
+
+
+STATIC mp_obj_t busio_jacdac_receive(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_buffer, ARG_start, ARG_end };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_buffer,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+        { MP_QSTR_start,      MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 0} },
+        { MP_QSTR_end,        MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = INT_MAX} },
+    };
+    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(pos_args[0]);
+    check_for_deinit(self);
+
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    mp_buffer_info_t bufinfo;
+    mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_WRITE);
+    int32_t start = args[ARG_start].u_int;
+    size_t length = bufinfo.len;
+    normalize_buffer_bounds(&start, args[ARG_end].u_int, &length);
+
+    if (length == 0) {
+        return mp_const_none;
+    }
+
+    return  MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length));
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_receive_obj, 2, busio_jacdac_receive);
+
+
 
 STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_deinit),       MP_ROM_PTR(&busio_jacdac_deinit_obj) },
     { MP_ROM_QSTR(MP_QSTR___enter__),    MP_ROM_PTR(&default___enter___obj) },
     { MP_ROM_QSTR(MP_QSTR___exit__),     MP_ROM_PTR(&busio_jacdac___exit___obj) },
 
-    { MP_ROM_QSTR(MP_QSTR_send),     MP_ROM_PTR(&mp_stream_read_obj) },
-    { MP_ROM_QSTR(MP_QSTR_receive), MP_ROM_PTR(&mp_stream_unbuffered_readline_obj)},
+    { MP_ROM_QSTR(MP_QSTR_send),     MP_ROM_PTR(&busio_jacdac_send_obj) },
+    { MP_ROM_QSTR(MP_QSTR_receive),  MP_ROM_PTR(&busio_jacdac_receive_obj) },
 
     // Properties
-    { MP_NEW_QSTR(MP_QSTR_packets),     MP_ROM_PTR(&busio_jacdac_packets_obj) },
+    //{ MP_ROM_QSTR(MP_QSTR_packets),     MP_ROM_PTR(&busio_jacdac_packets_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(busio_jacdac_locals_dict, busio_jacdac_locals_dict_table);
 

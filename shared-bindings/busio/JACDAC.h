@@ -31,22 +31,18 @@
 #include "common-hal/busio/JACDAC.h"
 #include "py/ringbuf.h"
 
-extern const mp_obj_type_t busio_uart_type;
+extern const mp_obj_type_t busio_jacdac_type;
 
 // Construct an underlying UART object.
-extern void common_hal_busio_jacdac_construct(busio_uart_obj_t *self,
-    const mcu_pin_obj_t * tx, uint16_t receiver_buffer_size, byte* receiver_buffer,
-    bool sigint_enabled);
+extern void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pin_obj_t * pin);
 
-extern void common_hal_busio_jacdac_deinit(busio_uart_obj_t *self);
-extern bool common_hal_busio_jacdac_deinited(busio_uart_obj_t *self);
+extern void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context);
+extern bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context);
 
-// Read characters. len is in characters NOT bytes!
-extern int common_hal_busio_jacdac_receive(busio_uart_obj_t *self,
-    uint8_t *data, size_t len);
 
-// Write characters. len is in characters NOT bytes!
-extern int common_hal_busio_jacdac_send(busio_uart_obj_t *self, const uint8_t *data);
-extern bool common_hal_busio_jacdac_ready_to_tx(busio_uart_obj_t *self);
+
+extern void common_hal_busio_jacdac_send_frame(jd_frame_t *frame);
+extern uint8_t common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint32_t *data, size_t len);
+extern uint8_t common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
 
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BUSIO_JACDAC_H
