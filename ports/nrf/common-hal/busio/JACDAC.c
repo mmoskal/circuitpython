@@ -36,10 +36,11 @@
 #include "supervisor/shared/translate.h"
 
 
-#include "nrfx_gpiote.h"
+
 #include "nrfx_config.h"
+#include "nrfx_gpiote.h"
 #include "nrf_gpio.h"
-#include "nrfx_uarte.h"
+
 
 
 #include <string.h>
@@ -70,7 +71,30 @@ busio_jacdac_obj_t* self;
 #define SWS_EVT_ERROR               3
 #define SWS_EVT_DATA_DROPPED        4
 
-static void sws_done(uint8_t errCode);
+
+#define JD_RX_ARRAY_SIZE 10
+#define JD_TX_ARRAY_SIZE 10
+
+// buffers
+static volatile uint8_t txHead;
+static volatile uint8_t txTail;
+static volatile uint8_t rxHead;
+static volatile uint8_t rxTail;
+
+static jd_frame_t* rxArray[JD_RX_ARRAY_SIZE];
+static jd_frame_t* txArray[JD_TX_ARRAY_SIZE];
+
+// timer
+static nrfx_uarte_t* uarte;
+static nrfx_timer_t* timer;
+static volatile uint8_t timer_refcount = 0;
+
+
+static void set_tick_timer(uint8_t statusClear);
+static void tim_set_timer(int delta, cb_t cb);
+
+static void jd_line_falling(void);
+
 
 /****************************************************************************/
 
@@ -80,24 +104,64 @@ typedef enum {
     SINGLE_WIRE_DISCONNECTED
 } single_wire_mode;
 
-static void ledOn(void) {
+static void led1On(void) {
     nrf_gpio_cfg_output(pin_P1_02.number);
     nrf_gpio_pin_write(pin_P1_02.number, 1);
 }
 
-static void ledOff(void) {
+static void led1Off(void) {
     nrf_gpio_cfg_output(pin_P1_02.number);
     nrf_gpio_pin_write(pin_P1_02.number, 0);
 }
 
-static void led1On(void) {
-    nrf_gpio_cfg_output(pin_P1_04.number);
-    nrf_gpio_pin_write(pin_P1_04.number, 1);
+static void led1Toggle(void) {
+    nrf_gpio_cfg_output(pin_P1_02.number);
+    nrf_gpio_pin_toggle(pin_P1_02.number);
 }
 
-static void led1Off(void) {
-    nrf_gpio_cfg_output(pin_P1_04.number);
-    nrf_gpio_pin_write(pin_P1_04.number, 0);
+static void led2On(void) {
+    nrf_gpio_cfg_output(pin_P1_05.number);
+    nrf_gpio_pin_write(pin_P1_05.number, 1);
+}
+
+static void led2Off(void) {
+    nrf_gpio_cfg_output(pin_P1_05.number);
+    nrf_gpio_pin_write(pin_P1_05.number, 0);
+}
+
+static void led2Toggle(void) {
+    nrf_gpio_cfg_output(pin_P1_05.number);
+    nrf_gpio_pin_toggle(pin_P1_05.number);
+}
+
+static void led3On(void) {
+    nrf_gpio_cfg_output(pin_P1_06.number);
+    nrf_gpio_pin_write(pin_P1_06.number, 1);
+}
+
+static void led3Off(void) {
+    nrf_gpio_cfg_output(pin_P1_06.number);
+    nrf_gpio_pin_write(pin_P1_06.number, 0);
+}
+
+static void led3Toggle(void) {
+    nrf_gpio_cfg_output(pin_P1_06.number);
+    nrf_gpio_pin_toggle(pin_P1_06.number);
+}
+
+static void led4On(void) {
+    nrf_gpio_cfg_output(pin_P1_07.number);
+    nrf_gpio_pin_write(pin_P1_07.number, 1);
+}
+
+static void led4Off(void) {
+    nrf_gpio_cfg_output(pin_P1_07.number);
+    nrf_gpio_pin_write(pin_P1_07.number, 0);
+}
+
+static void led4Toggle(void) {
+    nrf_gpio_cfg_output(pin_P1_07.number);
+    nrf_gpio_pin_toggle(pin_P1_07.number);
 }
 
 /****************************************************************************/
@@ -126,17 +190,17 @@ static int configureTx(int enable) {
     if (enable && !(self->sws_status & TX_CONFIGURED)) {
         NRF_P0->DIR |= (1 << self->pin);
         NRF_P0->PIN_CNF[self->pin] =  3 << 2; // this overrides DIR setting above
-        self->uart->p_reg->PSEL.TXD = self->pin;
-        self->uart->p_reg->EVENTS_ENDTX = 0;
-        self->uart->p_reg->ENABLE = 8;
-        while(!(self->uart->p_reg->ENABLE));
+        uarte->p_reg->PSEL.TXD = self->pin;
+        uarte->p_reg->EVENTS_ENDTX = 0;
+        uarte->p_reg->ENABLE = 8;
+        while(!(uarte->p_reg->ENABLE));
         self->sws_status |= TX_CONFIGURED;
     } else if (self->sws_status & TX_CONFIGURED) {
-        self->uart->p_reg->TASKS_STOPTX = 1;
-        while(self->uart->p_reg->TASKS_STOPTX);
-        self->uart->p_reg->ENABLE = 0;
-        while((self->uart->p_reg->ENABLE));
-        self->uart->p_reg->PSEL.TXD = 0xFFFFFFFF;
+        uarte->p_reg->TASKS_STOPTX = 1;
+        while(uarte->p_reg->TASKS_STOPTX);
+        uarte->p_reg->ENABLE = 0;
+        while((uarte->p_reg->ENABLE));
+        uarte->p_reg->PSEL.TXD = 0xFFFFFFFF;
         self->sws_status &= ~TX_CONFIGURED;
     }
 
@@ -147,19 +211,19 @@ static int configureRx(int enable) {
     if (enable && !(self->sws_status & RX_CONFIGURED)) {
         NRF_P0->DIR &= ~(1 << self->pin);
         NRF_P0->PIN_CNF[self->pin] =  3 << 2; // this overrides DIR setting above
-        self->uart->p_reg->PSEL.RXD = self->pin;
-        self->uart->p_reg->EVENTS_ENDRX = 0;
-        self->uart->p_reg->EVENTS_ERROR = 0;
-        self->uart->p_reg->ERRORSRC = self->uart->p_reg->ERRORSRC;
-        self->uart->p_reg->ENABLE = 8;
-        while(!(self->uart->p_reg->ENABLE));
+        uarte->p_reg->PSEL.RXD = self->pin;
+        uarte->p_reg->EVENTS_ENDRX = 0;
+        uarte->p_reg->EVENTS_ERROR = 0;
+        uarte->p_reg->ERRORSRC = uarte->p_reg->ERRORSRC;
+        uarte->p_reg->ENABLE = 8;
+        while(!(uarte->p_reg->ENABLE));
         self->sws_status |= RX_CONFIGURED;
     } else if (enable == 0 && self->sws_status & RX_CONFIGURED) {
-        self->uart->p_reg->TASKS_STOPRX = 1;
-        while(self->uart->p_reg->TASKS_STOPRX);
-        self->uart->p_reg->ENABLE = 0;
-        while((self->uart->p_reg->ENABLE));
-        self->uart->p_reg->PSEL.RXD = 0xFFFFFFFF;
+        uarte->p_reg->TASKS_STOPRX = 1;
+        while(uarte->p_reg->TASKS_STOPRX);
+        uarte->p_reg->ENABLE = 0;
+        while((uarte->p_reg->ENABLE));
+        uarte->p_reg->PSEL.RXD = 0xFFFFFFFF;
         self->sws_status &= ~RX_CONFIGURED;
     }
 
@@ -183,99 +247,31 @@ static int sws_setMode(single_wire_mode mode) {
 /****************************************************************************/
 
 static void configureRxInterrupt(int enable) {
-    if (enable)
-        self->uart->p_reg->INTENSET = (UARTE_INTENSET_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
-    else
-        self->uart->p_reg->INTENCLR = (UARTE_INTENCLR_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
+    if (enable) {
+        led2On();
+        uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
+    } else {
+        led2Off();
+        uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
+    }
 }
 
 static void configureTxInterrupt(int enable) {
-    if (enable)
-        self->uart->p_reg->INTENSET = (UARTE_INTENSET_ENDTX_Msk);
-    else
-        self->uart->p_reg->INTENCLR = (UARTE_INTENCLR_ENDTX_Msk);
-}
-
-
-uint8_t rx_char; // EasyDMA buf
-
-static void sws_callback_irq(const nrfx_uarte_event_t* event, void* context) {
-
-
-    uint8_t eventValue = 0;
-    switch ( event->type ) {
-        case NRFX_UARTE_EVT_RX_DONE:
-            configureRxInterrupt(0);
-            eventValue = SWS_EVT_DATA_RECEIVED;
-            break;
-
-        case NRFX_UARTE_EVT_TX_DONE:
-            configureTxInterrupt(0);
-            eventValue = SWS_EVT_DATA_SENT;
-            break;
-
-        case NRFX_UARTE_EVT_ERROR:
-            // Possible Error source is Overrun, Parity, Framing, Break
-            // uint32_t errsrc = event->data.error.error_mask;
-
-            //ringbuf_put_n(&self->ringbuf, event->data.error.rxtx.p_data, event->data.error.rxtx.bytes);
-
-            // Keep receiving
-            //(void) nrfx_uarte_rx(self->uarte, &self->rx_char, 1);
-
-            // if we're in reception mode, stop it (error doesn't automatically do so)
-            //self->uart->p_reg->TASKS_STOPRX = 1;
-            //while (self->uart->p_reg->TASKS_STOPRX);
-            // clear error src
-            //self->uart->p_reg->ERRORSRC = self->uart->p_reg->ERRORSRC;
-            // don't wait for ENDRX event, it takes additional 50uS to arrive
-            configureRxInterrupt(0);
-            eventValue = SWS_EVT_DATA_RECEIVED;
-            break;
-
-        default:
-            break;
-
-
-    }
-    /*
-    if (self->uart->p_reg->EVENTS_ENDRX) {
-
-        self->uart->p_reg->EVENTS_ENDRX = 0;
-        configureRxInterrupt(0);
-        eventValue = SWS_EVT_DATA_RECEIVED;
-
-    } else if (self->uart->p_reg->EVENTS_ENDTX) {
-
-        self->uart->p_reg->EVENTS_ENDTX = 0;
-        configureTxInterrupt(0);
-        eventValue = SWS_EVT_DATA_SENT;
-
-    } else if (self->uart->p_reg->EVENTS_ERROR && (self->uart->p_reg->INTEN & UARTE_INTENSET_ERROR_Msk)) {
-        self->uart->p_reg->EVENTS_ERROR = 0;
-        // if we're in reception mode, stop it (error doesn't automatically do so)
-        self->uart->p_reg->TASKS_STOPRX = 1;
-        while (self->uart->p_reg->TASKS_STOPRX);
-        // clear error src
-        self->uart->p_reg->ERRORSRC = self->uart->p_reg->ERRORSRC;
-        // don't wait for ENDRX event, it takes additional 50uS to arrive
-        configureRxInterrupt(0);
-        eventValue = SWS_EVT_DATA_RECEIVED;
-
+    if (enable) {
+        led4On();
+        uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDTX_Msk);
     } else {
-        led1On();
+        led4Off();
+        uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDTX_Msk);
     }
-*/
-    if (eventValue > 0) {
-        sws_done(eventValue);
-    }
-
-
 }
+
 
 /****************************************************************************/
 
 static int sws_sendDMA(const uint8_t* data, int len) {
+
+
     if (!(self->sws_status & TX_CONFIGURED))
         sws_setMode(SINGLE_WIRE_TX);
 
@@ -289,24 +285,27 @@ static int sws_sendDMA(const uint8_t* data, int len) {
         memcpy(tx_buf, data, len);
     }
 
-    _VERIFY_ERR(nrfx_uarte_tx(self->uart, tx_buf, len));
+    nrfx_uarte_tx(uarte, tx_buf, len);
+
+
 
     // Wait for write to complete.
-    while ( nrfx_uarte_tx_in_progress(self->uart) ) {
+    while ( nrfx_uarte_tx_in_progress(uarte) ) {
         RUN_BACKGROUND_TASKS;
     }
+
 
     if ( !nrfx_is_in_ram(data) ) {
         gc_free(tx_buf);
     }
 
 /*
-    self->uart->p_reg->TXD.PTR = (uint32_t)data;
-    self->uart->p_reg->TXD.MAXCNT = len;
+    uarte->p_reg->TXD.PTR = (uint32_t)data;
+    uarte->p_reg->TXD.MAXCNT = len;
 
     configureTxInterrupt(1);
 
-    self->uart->p_reg->TASKS_STARTTX = 1;
+    uarte->p_reg->TASKS_STARTTX = 1;
 */
 
     return DEVICE_OK;
@@ -318,14 +317,14 @@ static int sws_receiveDMA(uint8_t* data, int len) {
     if (!(self->sws_status & RX_CONFIGURED))
         sws_setMode(SINGLE_WIRE_RX);
 
-    //self->uart->p_reg->RXD.PTR = (uint32_t)data;
-    //self->uart->p_reg->RXD.MAXCNT = len;
+    //uarte->p_reg->RXD.PTR = (uint32_t)data;
+    //uarte->p_reg->RXD.MAXCNT = len;
 
     configureRxInterrupt(1);
 
-    //self->uart->p_reg->TASKS_STARTRX = 1;
+    //uarte->p_reg->TASKS_STARTRX = 1;
 
-    _VERIFY_ERR(nrfx_uarte_rx(self->uart, data, len));
+    _VERIFY_ERR(nrfx_uarte_rx(uarte, data, len));
     return DEVICE_OK;
 }
 
@@ -335,8 +334,8 @@ static int sws_abortDMA(void) {
     configureTxInterrupt(0);
     configureRxInterrupt(0);
 
-    nrfx_uarte_tx_abort(self->uart);
-    nrfx_uarte_rx_abort(self->uart);
+    nrfx_uarte_tx_abort(uarte);
+    nrfx_uarte_rx_abort(uarte);
 
     return DEVICE_OK;
 }
@@ -345,50 +344,6 @@ static int sws_abortDMA(void) {
 
 
 
-static void sws_construct(const mcu_pin_obj_t* pin) {
-
-    claim_pin(pin);
-
-    self->pin = pin->number;
-    self->sws_status = 0;
-
-    self->uart = NULL;
-    for (size_t i = 0 ; i < MP_ARRAY_SIZE(nrfx_uartes); i++) {
-        if ((nrfx_uartes[i].p_reg->ENABLE & UARTE_ENABLE_ENABLE_Msk) == 0) {
-            self->uart = &nrfx_uartes[i];
-            break;
-        }
-    }
-
-    if (self->uart == NULL)
-        mp_raise_ValueError(translate("All UART peripherals are in use"));
-
-    nrfx_uarte_config_t uart_config = {
-        .pseltxd = NRF_UARTE_PSEL_DISCONNECTED,
-        .pselrxd = NRF_UARTE_PSEL_DISCONNECTED,
-        .pselcts = NRF_UARTE_PSEL_DISCONNECTED,
-        .pselrts = NRF_UARTE_PSEL_DISCONNECTED,
-        .p_context = self,
-        .baudrate = NRF_UARTE_BAUDRATE_1000000, //NRF_UARTE_BAUDRATE_9600, //TODO switch back to NRF_UARTE_BAUDRATE_1000000,
-        .interrupt_priority = 1,
-        .hal_cfg = {
-            .hwfc = NRF_UARTE_HWFC_DISABLED,
-            .parity = NRF_UARTE_PARITY_INCLUDED,
-        }
-    };
-    _VERIFY_ERR(nrfx_uarte_init(self->uart, &uart_config, sws_callback_irq));
-
-    self->sws_status |= DEVICE_COMPONENT_RUNNING;
-}
-
-static void sws_deinit(void) {
-    sws_abortDMA();
-
-    nrfx_uarte_uninit(self->uart);
-
-    reset_pin_number(self->pin);
-    self->pin = NO_PIN;
-}
 
 /****************************************************************************/
 /****************************************************************************/
@@ -494,9 +449,13 @@ static uint32_t jd_random_around(uint32_t v) {
 static void jd_panic(void) {
     target_disable_irq();
 
+    common_hal_mcu_delay_us(10000);
+
     //DMESG("*** CODAL PANIC : [%d]", statusCode);
     led1On();
-    ledOn();
+    led2On();
+    led3On();
+    led4On();
     while (1) {}
 }
 
@@ -528,14 +487,14 @@ static uint16_t jd_crc16(const void *data, uint32_t size) {
 // FIFO circular buffers.
 static jd_frame_t* popRxArray(void) {
     // nothing to pop
-    if (self->buffer->rxTail == self->buffer->rxHead)
+    if (rxTail == rxHead)
         return NULL;
 
     target_disable_irq();
-    uint8_t nextHead = (self->buffer->rxHead + 1) % JD_RX_ARRAY_SIZE;
-    jd_frame_t* p = self->buffer->rxArray[self->buffer->rxHead];
-    self->buffer->rxArray[self->buffer->rxHead] = NULL;
-    self->buffer->rxHead = nextHead;
+    uint8_t nextHead = (rxHead + 1) % JD_RX_ARRAY_SIZE;
+    jd_frame_t* p = rxArray[rxHead];
+    rxArray[rxHead] = NULL;
+    rxHead = nextHead;
     target_enable_irq();
 
     return p;
@@ -544,15 +503,15 @@ static jd_frame_t* popRxArray(void) {
 // FIFO circular buffers.
 static jd_frame_t* popTxArray(void) {
     // nothing to pop
-    if (self->buffer->txTail == self->buffer->txHead)
+    if (txTail == txHead)
         return NULL;
 
 
     target_disable_irq();
-    uint8_t nextHead = (self->buffer->txHead + 1) % JD_TX_ARRAY_SIZE;
-    jd_frame_t* p = self->buffer->txArray[self->buffer->txHead];
-    self->buffer->txArray[self->buffer->txHead] = NULL;
-    self->buffer->txHead = nextHead;
+    uint8_t nextHead = (txHead + 1) % JD_TX_ARRAY_SIZE;
+    jd_frame_t* p = txArray[txHead];
+    txArray[txHead] = NULL;
+    txHead = nextHead;
     target_enable_irq();
 
     return p;
@@ -560,16 +519,16 @@ static jd_frame_t* popTxArray(void) {
 
 // FIFO circular buffers.
 static int addToTxArray(jd_frame_t* frame) {
-    uint8_t nextTail = (self->buffer->txTail + 1) % JD_TX_ARRAY_SIZE;
+    uint8_t nextTail = (txTail + 1) % JD_TX_ARRAY_SIZE;
 
-    if (nextTail == self->buffer->txHead)
+    if (nextTail == txHead)
         return DEVICE_NO_RESOURCES;
 
     // add our buffer to the array before updating the head
     // this ensures atomicity.
-    self->buffer->txArray[self->buffer->txTail] = frame;
+    txArray[txTail] = frame;
     target_disable_irq();
-    self->buffer->txTail = nextTail;
+    txTail = nextTail;
     target_enable_irq();
 
     return DEVICE_OK;
@@ -577,16 +536,16 @@ static int addToTxArray(jd_frame_t* frame) {
 
 // FIFO circular buffers.
 static int addToRxArray(jd_frame_t* frame) {
-     uint8_t nextTail = (self->buffer->rxTail + 1) % JD_RX_ARRAY_SIZE;
+     uint8_t nextTail = (rxTail + 1) % JD_RX_ARRAY_SIZE;
 
-    if (nextTail == self->buffer->rxHead)
+    if (nextTail == rxHead)
         return DEVICE_NO_RESOURCES;
 
     // add our buffer to the array before updating the head
     // this ensures atomicity.
-    self->buffer->rxArray[self->buffer->rxTail] = frame;
+    rxArray[rxTail] = frame;
     target_disable_irq();
-    self->buffer->rxTail = nextTail;
+    rxTail = nextTail;
     target_enable_irq();
 
     return DEVICE_OK;
@@ -615,89 +574,19 @@ static int addToRxArray(jd_frame_t* frame) {
 
 static volatile uint8_t hw_status;
 
-static void jd_line_falling(void);
+
 static void jd_tx_completed(int errCode);
 static void jd_rx_completed(void);
 static void setup_exti(void);
 
-
-static void sws_done(uint8_t errCode) {
-    //pin_pulse();
-    //pin_pulse();
-
-    // LOG("sws_done %d @%d", errCode, (int)tim_get_micros());
-
-
-    switch (errCode) {
-    case SWS_EVT_DATA_SENT:
-        if (hw_status & STATUS_IN_TX) {
-            hw_status &= ~STATUS_IN_TX;
-            sws_setMode(SINGLE_WIRE_DISCONNECTED);
-            // force reconfigure
-            //sws->p.getDigitalValue();
-            // send break signal
-            //sws->p.setDigitalValue(0);
-            gpio_set(0);
-            //target_wait_us(11);
-            common_hal_mcu_delay_us(11);
-            //sws->p.setDigitalValue(1);
-            gpio_set(1);
-            jd_tx_completed(0);
-        }
-        break;
-    case SWS_EVT_ERROR: // brk condition
-        if (!(hw_status & STATUS_IN_RX)) {
-            //LOG("SWS error");
-            //target_panic(122);
-            jd_panic();
-        } else {
-            return;
-        }
-        break;
-    case SWS_EVT_DATA_RECEIVED:
-
-        // LOG("DMA overrun");
-        // sws->getBytesReceived() always returns 1 on NRF
-        if (hw_status & STATUS_IN_RX) {
-            hw_status &= ~STATUS_IN_RX;
-            sws_setMode(SINGLE_WIRE_DISCONNECTED);
-            jd_rx_completed();
-        } else {
-            //LOG("double complete");
-            //target_panic(122);
-            jd_panic();
-        }
-        sws_abortDMA();
-        break;
-    }
-    setup_exti();
-
-    //pin_pulse();
-
-}
-
-
-static void line_falling(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    //pin_log(1);
-    if (action == NRF_GPIOTE_POLARITY_LOTOHI)
-        return; // rising
-
-
-    if (gpio_isOutput()) {
-        // LOG("in send already");
-        return;
-    }
-
-    //sws->p.eventOn(DEVICE_PIN_EVENT_NONE);
-    gpio_disable_interrupts();
-    jd_line_falling();
-}
 
 static int uart_start_tx(const jd_frame_t* frame) {
 
     if (hw_status & STATUS_IN_TX) {
         jd_panic();
     }
+
+
 
     target_disable_irq();
     if (hw_status & STATUS_IN_RX) {
@@ -708,6 +597,7 @@ static int uart_start_tx(const jd_frame_t* frame) {
 
 
     gpio_disable_interrupts();
+
     int val = gpio_get_high_impedence(); //sws->p.getDigitalValue();
     target_enable_irq();
 
@@ -791,25 +681,6 @@ static void setup_exti(void) {
 
 
 
-
-static void uart_init(void) {
-
-    //sws_setMode(self, SINGLE_WIRE_DISCONNECTED);
-    nrfx_gpiote_in_config_t gpio_config = {
-        .sense = NRF_GPIOTE_POLARITY_TOGGLE,
-        .pull = NRF_GPIO_PIN_PULLUP, // idle_state ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP,
-        .is_watcher = false, // nrf_gpio_cfg_watcher vs nrf_gpio_cfg_input
-        .hi_accuracy = true,
-        .skip_gpio_setup = true
-    };
-    _VERIFY_ERR(nrfx_gpiote_in_init(self->pin, &gpio_config, &line_falling));
-
-    setup_exti();
-
-    //pin_log(0);
-}
-
-
 /****************************************************************************/
 /****************************************************************************/
 /****************************************************************************/
@@ -842,8 +713,6 @@ static void uart_init(void) {
 #define JD_STATUS_TX_QUEUED 0x04
 
 
-volatile uint32_t test_status = 0;
-
 static cb_t tim_cb;
 
 static volatile uint8_t jd_status;
@@ -869,7 +738,7 @@ jd_diagnostics_t *jd_get_diagnostics(void) {
 
 /***********************************************************/
 
-static void set_tick_timer(uint8_t statusClear);
+
 
 
 
@@ -886,50 +755,7 @@ static void jd_tx_completed(int errCode) {
     tx_done();
 }
 
-static void flush_tx_queue(void) {
-    // pulse1();
-    /*
-    if (annCounter++ == 0)
-        check_announce();
-    */
 
-
-
-    //LOG("flush %d", jd_status);
-    target_disable_irq();
-    if (jd_status & (JD_STATUS_RX_ACTIVE | JD_STATUS_TX_ACTIVE)) {
-        target_enable_irq();
-        return;
-    }
-
-    jd_status |= JD_STATUS_TX_ACTIVE;
-    target_enable_irq();
-
-    txPending = 0;
-    if (!txFrame) {
-        //txFrame = app_pull_frame();
-
-        txFrame = popTxArray();
-        if (txFrame == NULL) {
-            tx_done();
-            return;
-        }
-    }
-
-    //signal_write(1);
-    if (uart_start_tx(txFrame) < 0) {
-        // ERROR("race on TX");
-        jd_diagnostics.bus_lo_error++;
-        tx_done();
-        txPending = 1;
-
-        return;
-    }
-
-
-
-    set_tick_timer(0);
-}
 
 /*
 static void check_announce(void) {
@@ -941,86 +767,20 @@ static void check_announce(void) {
     }
 }
 */
-bool state = true;
-static void tick(void) {
-    //check_announce();
-    set_tick_timer(0);
 
-    state = !state;
-    /*
-    if (state)
-        led1On();
-    else
-        led1Off();
-        */
-}
 
-static void tim_callback(nrf_timer_event_t event_type, void* p_context) {
-    cb_t f = tim_cb;
-    if (f) {
-        tim_cb = NULL;
-        f();
-    }
-}
 
-static void tim_set_timer(int delta, cb_t cb) {
-     // compensate for overheads
-    delta -= JD_TIM_OVERHEAD;
-    if (delta < 20)
-        delta = 20;
-/*
-    uint64_t ticks = delta * 31250ULL;
-    if (ticks > UINT32_MAX) {
-        mp_raise_ValueError(translate("timeout duration exceeded the maximum supported value"));
-    }
-*/
-    target_disable_irq();
 
-    tim_cb = cb;
 
-    //uint64_t t = delta * ((SystemCoreClock) / (1000UL * 1000UL));
-
-    uint32_t t = nrfx_timer_us_to_ticks(self->timer, delta);
-
-    nrfx_timer_clear(self->timer);
-    nrfx_timer_compare(self->timer, NRF_TIMER_CC_CHANNEL0, t, true);
-    //nrfx_timer_resume(self->timer);
-
-    //system_timer_event_after_us(delta, DEVICE_ID, currEvent);
-    //system_timer_cancel_event(DEVICE_ID, prev); // make sure we don't get the same slot
-
-    target_enable_irq();
-}
-
-static void set_tick_timer(uint8_t statusClear) {
-
-    target_disable_irq();
-    if (statusClear) {
-        // LOG("st %d @%d", statusClear, jd_status);
-        jd_status &= ~statusClear;
-    }
-    if ((jd_status & JD_STATUS_RX_ACTIVE) == 0) {
-        if (txPending && !(jd_status & JD_STATUS_TX_ACTIVE)) {
-            //pulse1();
-            // the JD_WR_OVERHEAD value should be such, that the time from pulse1() above
-            // to beginning of low-pulse generated by the current device is exactly 150us
-            // (when the line below is uncommented)
-            // tim_set_timer(150 - JD_WR_OVERHEAD, flush_tx_queue);
-            jd_status |= JD_STATUS_TX_QUEUED;
-            tim_set_timer(jd_random_around(150) - JD_WR_OVERHEAD, flush_tx_queue);
-
-        } else {
-            jd_status &= ~JD_STATUS_TX_QUEUED;
-            tim_set_timer(10000, tick);
-        }
-    }
-    target_enable_irq();
-
-}
 
 
 
 static void rx_timeout(void) {
+
+    led2On();
+    led3On();
+    led4On();
+
     target_disable_irq();
     jd_diagnostics.bus_timeout_error++;
     //ERROR("RX timeout");
@@ -1134,6 +894,8 @@ static void jd_packet_ready(void) {
     }
     target_enable_irq();
 }
+
+
 /*
 TODO
 static int jd_is_running(void) {
@@ -1145,119 +907,411 @@ static int jd_is_busy(void) {
 }
 */
 
+static void flush_tx_buffer(void) {
+
+    // pulse1();
+    /*
+    if (annCounter++ == 0)
+        check_announce();
+    */
 
 
 
-
-
-/****************************************************************************/
-/****************************************************************************/
-/****************************************************************************/
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//common_hal_mcu_delay_us(11);
-
-/***********************************************************************************************/
-/***********************************************************************************************/
-/***********************************************************************************************/
-/***********************************************************************************************/
-/***********************************************************************************************/
-static uint8_t refcount = 0;
-
-
-static void tim_init(void) {
-    if (refcount == 0) {
-        self->timer = nrf_peripherals_allocate_timer_or_throw();
+    //LOG("flush %d", jd_status);
+    target_disable_irq();
+    if (jd_status & (JD_STATUS_RX_ACTIVE | JD_STATUS_TX_ACTIVE)) {
+        target_enable_irq();
+        return;
     }
-    refcount++;
 
-    nrfx_timer_config_t timer_config = {
-        .frequency = NRF_TIMER_FREQ_16MHz,
-        .mode = NRF_TIMER_MODE_TIMER,
-        .bit_width = NRF_TIMER_BIT_WIDTH_16,
-        .interrupt_priority = NRFX_TIMER_DEFAULT_CONFIG_IRQ_PRIORITY,
-        .p_context = NULL,
-    };
-    _VERIFY_ERR(nrfx_timer_init(self->timer, &timer_config, tim_callback));
+    jd_status |= JD_STATUS_TX_ACTIVE;
+    target_enable_irq();
 
-    nrfx_timer_enable(self->timer);
-}
+    txPending = 0;
+    if (!txFrame) {
+        //txFrame = app_pull_frame();
+        txFrame = popTxArray();
+        if (txFrame == NULL) {
+            tx_done();
+            return;
+        }
+    }
+
+    //signal_write(1);
+    if (uart_start_tx(txFrame) < 0) {
+        // ERROR("race on TX");
+        jd_diagnostics.bus_lo_error++;
+        tx_done();
+        txPending = 1;
+
+        return;
+    }
 
 
-static void jd_init(void) {
-    //DMESG("JD: init");
-    tim_init();
+
     set_tick_timer(0);
-    uart_init();
+}
+
+
+static void tick(void) {
+    led1Toggle();
+
+
     //check_announce();
+    set_tick_timer(0);
+}
+
+static void tim_set_timer(int delta, cb_t cb) {
+     // compensate for overheads
+    delta -= JD_TIM_OVERHEAD;
+    if (delta < 20)
+        delta = 20;
+/*
+    uint64_t ticks = delta * 31250ULL;
+    if (ticks > UINT32_MAX) {
+        mp_raise_ValueError(translate("timeout duration exceeded the maximum supported value"));
+    }
+*/
+    target_disable_irq();
+
+    tim_cb = cb;
+
+    //uint64_t t = delta * ((SystemCoreClock) / (1000UL * 1000UL));
+
+    uint32_t t = nrfx_timer_us_to_ticks(timer, delta);
+
+    nrfx_timer_clear(timer);
+    nrfx_timer_compare(timer, NRF_TIMER_CC_CHANNEL0, t, true);
+    //nrfx_timer_resume(timer);
+
+    //system_timer_event_after_us(delta, DEVICE_ID, currEvent);
+    //system_timer_cancel_event(DEVICE_ID, prev); // make sure we don't get the same slot
+
+    target_enable_irq();
+}
+
+
+static void set_tick_timer(uint8_t statusClear) {
+
+    target_disable_irq();
+    if (statusClear) {
+        // LOG("st %d @%d", statusClear, jd_status);
+        jd_status &= ~statusClear;
+    }
+    if ((jd_status & JD_STATUS_RX_ACTIVE) == 0) {
+        if (txPending && !(jd_status & JD_STATUS_TX_ACTIVE)) {
+            //pulse1();
+            // the JD_WR_OVERHEAD value should be such, that the time from pulse1() above
+            // to beginning of low-pulse generated by the current device is exactly 150us
+            // (when the line below is uncommented)
+            // tim_set_timer(150 - JD_WR_OVERHEAD, flush_tx_queue);
+            jd_status |= JD_STATUS_TX_QUEUED;
+            tim_set_timer(jd_random_around(150) - JD_WR_OVERHEAD, flush_tx_buffer);
+        } else {
+            jd_status &= ~JD_STATUS_TX_QUEUED;
+            tim_set_timer(10000, tick);
+        }
+    }
+    target_enable_irq();
+
 }
 
 
 
-static void buffer_init(void) {
-    self->buffer = m_new_ll_obj(busio_jacdac_buffer_obj_t);
-    self->buffer->rxBuf = NULL;
-    self->buffer->txBuf = NULL;
-    memset(self->buffer->rxArray, 0, sizeof(jd_frame_t*) * JD_RX_ARRAY_SIZE);
-    memset(self->buffer->txArray, 0, sizeof(jd_frame_t*) * JD_TX_ARRAY_SIZE);
-    self->buffer->txTail = 0;
-    self->buffer->txHead = 0;
-    self->buffer->rxTail = 0;
-    self->buffer->rxHead = 0;
+
+static void sws_done(uint8_t errCode) {
+    //pin_pulse();
+    //pin_pulse();
+
+    // LOG("sws_done %d @%d", errCode, (int)tim_get_micros());
+
+
+    switch (errCode) {
+    case SWS_EVT_DATA_SENT:
+        if (hw_status & STATUS_IN_TX) {
+            hw_status &= ~STATUS_IN_TX;
+            sws_setMode(SINGLE_WIRE_DISCONNECTED);
+            // force reconfigure
+            //sws->p.getDigitalValue();
+            // send break signal
+            //sws->p.setDigitalValue(0);
+            gpio_set(0);
+            //target_wait_us(11);
+            common_hal_mcu_delay_us(11);
+            //sws->p.setDigitalValue(1);
+            gpio_set(1);
+            jd_tx_completed(0);
+        }
+        break;
+        /*
+    case SWS_EVT_ERROR: // brk condition
+        if (!(hw_status & STATUS_IN_RX)) {
+            //LOG("SWS error");
+            //target_panic(122);
+            jd_panic();
+        } else {
+            return;
+        }
+        break;
+        */
+    case SWS_EVT_DATA_RECEIVED:
+
+        // LOG("DMA overrun");
+        // sws->getBytesReceived() always returns 1 on NRF
+        if (hw_status & STATUS_IN_RX) {
+            hw_status &= ~STATUS_IN_RX;
+            sws_setMode(SINGLE_WIRE_DISCONNECTED);
+            jd_rx_completed();
+        } else {
+            //LOG("double complete");
+            //target_panic(122);
+            jd_panic();
+        }
+        sws_abortDMA();
+        break;
+    }
+    setup_exti();
+
+    //pin_pulse();
+
+}
+
+
+
+
+/***********************************************************************************/
+/***********************************************************************************/
+/***********************************************************************************/
+/***********************************************************************************/
+
+static void uart_irq(const nrfx_uarte_event_t* event, void* context) {
+
+    uint8_t eventValue = 0;
+    switch ( event->type ) {
+        case NRFX_UARTE_EVT_RX_DONE:
+            configureRxInterrupt(0);
+            eventValue = SWS_EVT_DATA_RECEIVED;
+            led3Toggle();
+            break;
+
+        case NRFX_UARTE_EVT_TX_DONE:
+            configureTxInterrupt(0);
+            eventValue = SWS_EVT_DATA_SENT;
+            led2Toggle();
+            break;
+
+        case NRFX_UARTE_EVT_ERROR:
+            // Possible Error source is Overrun, Parity, Framing, Break
+
+
+            //led2Toggle();
+            if (event->data.error.error_mask & NRF_UARTE_ERROR_BREAK_MASK && hw_status & STATUS_IN_RX) {
+                eventValue = SWS_EVT_DATA_RECEIVED;
+                configureRxInterrupt(0);
+                led1Toggle();
+            }
+
+            if (event->data.error.error_mask & NRF_UARTE_ERROR_FRAMING_MASK)
+                led3Toggle();
+
+            break;
+     }
+     /*
+     NRF_UARTE_ERROR_OVERRUN_MASK = UARTE_ERRORSRC_OVERRUN_Msk, ///< Overrun error.
+    NRF_UARTE_ERROR_PARITY_MASK  = UARTE_ERRORSRC_PARITY_Msk,  ///< Parity error.
+    NRF_UARTE_ERROR_FRAMING_MASK = UARTE_ERRORSRC_FRAMING_Msk, ///< Framing error.
+    NRF_UARTE_ERROR_BREAK_MASK   = UARTE_ERRORSRC_BREAK_Msk    ///< Break error.
+*/
+    if (eventValue > 0) {
+        led4Toggle();
+        sws_done(eventValue);
+    }
+}
+
+static void timer_irq(nrf_timer_event_t event_type, void* p_context) {
+    if (event_type == NRF_TIMER_EVENT_COMPARE0) {
+        cb_t f = tim_cb;
+        if (f != NULL) {
+            tim_cb = NULL;
+            f();
+        }
+    }
+}
+
+
+static void gpiote_callback(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
+    //led2Toggle();
+
+    if (gpio_isOutput()) {
+        // LOG("in send already");
+        return;
+    }
+
+    //sws->p.eventOn(DEVICE_PIN_EVENT_NONE);
+    gpio_disable_interrupts();
+    jd_line_falling();
+}
+
+/***********************************************************************************/
+/***********************************************************************************/
+/***********************************************************************************/
+/***********************************************************************************/
+
+
+static void initialize_buffers(void) {
+    memset(rxArray, 0, sizeof(jd_frame_t*) * JD_RX_ARRAY_SIZE);
+    memset(txArray, 0, sizeof(jd_frame_t*) * JD_TX_ARRAY_SIZE);
+    txTail = 0;
+    txHead = 0;
+    rxTail = 0;
+    rxHead = 0;
+}
+
+static void initialize_gpio(void) {
+    //sws_setMode(SINGLE_WIRE_DISCONNECTED);
+/*
+    nrfx_gpiote_in_config_t gpio_config = {
+        .sense = NRF_GPIOTE_POLARITY_TOGGLE,
+        .pull = NRF_GPIO_PIN_PULLUP, // idle_state ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP,
+        .is_watcher = false, // nrf_gpio_cfg_watcher vs nrf_gpio_cfg_input
+        .hi_accuracy = true,
+        .skip_gpio_setup = true
+    };
+    /*/
+    nrfx_gpiote_in_config_t cfg = {
+        .sense = NRF_GPIOTE_POLARITY_HITOLO,
+        .pull = NRF_GPIO_PIN_PULLUP, // idle_state ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP,
+        .is_watcher = false, // nrf_gpio_cfg_watcher vs nrf_gpio_cfg_input
+        .hi_accuracy = true,
+        .skip_gpio_setup = false
+    };
+
+    nrfx_gpiote_in_init(self->pin, &cfg, gpiote_callback);
+    nrfx_gpiote_in_event_enable(self->pin, true);
+
+
+    setup_exti();
+}
+
+static void initialize_timer(void) {
+    if (timer_refcount == 0) {
+        timer = nrf_peripherals_allocate_timer();
+        if (timer == NULL) {
+            jd_panic();
+            mp_raise_RuntimeError(translate("All timers in use"));
+        }
+
+        nrfx_timer_config_t timer_config = {
+            .frequency = NRF_TIMER_FREQ_16MHz,
+            .mode = NRF_TIMER_MODE_TIMER,
+            .bit_width = NRF_TIMER_BIT_WIDTH_32,
+            .interrupt_priority = NRFX_TIMER_DEFAULT_CONFIG_IRQ_PRIORITY,
+        };
+
+        nrfx_timer_init(timer, &timer_config, &timer_irq);
+        nrfx_timer_enable(timer);
+    }
+    timer_refcount++;
+
+}
+
+static void initialize_uart(void) {
+
+    uarte = NULL;
+
+    for (size_t i = 0; i < MP_ARRAY_SIZE(nrfx_uartes); i++) {
+        if ((nrfx_uartes[i].p_reg->ENABLE & UARTE_ENABLE_ENABLE_Msk) == 0) {
+            uarte = &nrfx_uartes[i];
+            break;
+        }
+    }
+
+    if (uarte == NULL)
+        mp_raise_ValueError(translate("All UART peripherals are in use"));
+
+    nrfx_uarte_config_t uart_config = {
+        .pseltxd = NRF_UARTE_PSEL_DISCONNECTED,
+        .pselrxd = NRF_UARTE_PSEL_DISCONNECTED,
+        .pselcts = NRF_UARTE_PSEL_DISCONNECTED,
+        .pselrts = NRF_UARTE_PSEL_DISCONNECTED,
+        .p_context = self,
+        .baudrate = NRF_UARTE_BAUDRATE_1000000,
+        .interrupt_priority = 1,
+        .hal_cfg = {
+            .hwfc = NRF_UARTE_HWFC_DISABLED,
+            .parity = NRF_UARTE_PARITY_EXCLUDED,
+        }
+    };
+
+    _VERIFY_ERR(nrfx_uarte_init(uarte, &uart_config, uart_irq));
+
+    //configureRxInterrupt(0);
+    //configureTxInterrupt(0);
+    //sws_setMode(SINGLE_WIRE_DISCONNECTED);
 }
 
 
 void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* context, const mcu_pin_obj_t* pin) {
     self = context;
+    self->pin = pin->number;
+    self->sws_status = 0;
 
-    ledOn();
-    ledOff();
-    led1On();
+
+    led1Toggle();
+    led2Toggle();
+    led3Toggle();
+    led4Toggle();
     led1Off();
+    led2Off();
+    led3Off();
+    led4Off();
 
-    sws_construct(pin);
-    buffer_init();
-    jd_init();
 
+
+    initialize_timer();
+
+    //nrf_gpio_cfg_input(self->pin, NRF_GPIO_PIN_PULLUP);
+    claim_pin(pin);
+
+    initialize_gpio();
+
+    initialize_buffers();
+    initialize_uart();
+
+    self->sws_status |= DEVICE_COMPONENT_RUNNING;
+
+    set_tick_timer(0);
+
+
+    //check_announce();
 }
 
 
 void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t* context) {
+    led2Toggle();
+
     self = context;
 
     if (common_hal_busio_jacdac_deinited(self))
         return;
 
-    uart_disable();
-
-    // timer
-    refcount--;
-    if (refcount == 0) {
-        nrf_peripherals_free_timer(self->timer);
-    }
-
-    // gpio
     nrfx_gpiote_in_event_disable(self->pin);
     nrfx_gpiote_in_uninit(self->pin);
 
-    // uart
-    sws_deinit();
+    // timer
+    timer_refcount--;
+    if (timer_refcount == 0) {
+        nrf_peripherals_free_timer(timer);
+    }
 
+
+    // uart
+    if (uarte != NULL)
+        nrfx_uarte_uninit(uarte);
+
+    // pin
+    reset_pin_number(self->pin);
+    self->pin = NO_PIN;
 }
 
 bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context) {
@@ -1265,25 +1319,15 @@ bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context) {
 }
 
 
-void common_hal_busio_jacdac_send_frame(jd_frame_t *frame) {
-    addToTxArray(frame);
-    jd_packet_ready();
-
-}
-
-
-
-
 uint8_t common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint32_t *data, size_t len) {
     self = context;
-    ledOff();
 
     jd_frame_t* t = m_new_ll_obj(jd_frame_t);
 
-    t->size = 1;
+    t->size = 16;
     t->flags = 0;
-    t->device_identifier = 23;
-    t->data[0] = 'a';
+    t->device_identifier = 0x747E48326EB44CF8;
+    t->data[0] = 12;
 
     uint32_t declaredSize = JD_FRAME_SIZE(t);
     t->crc = jd_crc16((uint8_t *)t + 2, declaredSize - 2);
@@ -1304,46 +1348,53 @@ uint8_t common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint32_t
 }
 
 uint8_t common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len) {
-    ledOn();
-
-
     jd_frame_t* t = popRxArray();
-
-    if (t != NULL && t->data[0] == 'a')
-        led1On();
 
     if (t != NULL)
         memcpy(data, t, sizeof(*t));
-        //*data = *((uint8_t*)t);
 
-/*
-    if (data[13] == 'a')
-        ledOn();
-*/
     return 0;
 }
-
 
 
 /****************************************************************************/
 
 void jacdac_reset(void) {
-    if (self->timer != NULL)
-        nrf_peripherals_free_timer(self->timer);
-    refcount = 0;
+
+    if ( nrfx_gpiote_is_init() ) {
+        nrfx_gpiote_uninit();
+    }
+    nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
+
+    if (timer != NULL) {
+        nrf_peripherals_free_timer(timer);
+    }
+    timer_refcount = 0;
+
+/*
+    // gpio
+    if ( nrfx_gpiote_is_init() ) {
+        nrfx_gpiote_uninit();
+    }
+    nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
+
+    // buffers
+    initialize_buffers();
+    */
+/*
+
+    // uart
+    for (size_t i = 0 ; i < MP_ARRAY_SIZE(nrfx_uartes); i++) {
+        nrfx_uarte_uninit(&nrfx_uartes[i]);
+    }
+*/
 /*
     jd_status = 0;
     hw_status = 0;
     self->sws_status = 0;
-    test_status = 0;
-    */
-    //setup_exti();
-    //sws_deinit();
-    /*
-    if (self->uart != NULL)
-        nrfx_uarte_uninit(self->uart);
-    self->uart = NULL;
-    */
+
+*/
+
 
     //reset_pin_number(self->pin);
     //self->pin = NO_PIN;

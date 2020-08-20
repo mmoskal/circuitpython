@@ -130,7 +130,7 @@ mp_obj_t common_hal_board_create_uart(void) {
 }
 #endif
 
-
+/*
 #if BOARD_JACDAC
 mp_obj_t common_hal_board_get_jacdac(void) {
     return MP_STATE_VM(shared_jacdac_bus);
@@ -147,7 +147,7 @@ mp_obj_t common_hal_board_create_jacdac(void) {
     return MP_STATE_VM(shared_jacdac_bus);
 }
 #endif
-
+*/
 void reset_board_busses(void) {
 #if BOARD_I2C
     bool display_using_i2c = false;
@@ -180,7 +180,9 @@ void reset_board_busses(void) {
 #if BOARD_UART
     MP_STATE_VM(shared_uart_bus) = NULL;
 #endif
+/*
 #if BOARD_JACDAC
     MP_STATE_VM(shared_jacdac_bus) = NULL;
 #endif
+*/
 }

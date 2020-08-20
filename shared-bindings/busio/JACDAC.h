@@ -41,7 +41,6 @@ extern bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context);
 
 
 
-extern void common_hal_busio_jacdac_send_frame(jd_frame_t *frame);
 extern uint8_t common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint32_t *data, size_t len);
 extern uint8_t common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
 

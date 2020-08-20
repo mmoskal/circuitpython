@@ -31,11 +31,9 @@
 
 
 #include "py/obj.h"
-#include "py/ringbuf.h"
 
-#include "peripherals/nrf/timers.h"
-
-
+#include "nrfx_uarte.h"
+#include "nrf/timers.h"
 
 
 
@@ -61,8 +59,7 @@
 /*****************************************************************/
 // implemented by JACDAC.h
 
-#define JD_RX_ARRAY_SIZE 10
-#define JD_TX_ARRAY_SIZE 10
+
 
 struct _jd_frame_t {
     uint16_t crc;
@@ -76,27 +73,12 @@ struct _jd_frame_t {
 typedef struct _jd_frame_t jd_frame_t;
 
 
-typedef struct {
-    uint8_t txHead;
-    uint8_t txTail;
-    uint8_t rxHead;
-    uint8_t rxTail;
-
-    jd_frame_t* rxBuf; // holds the pointer to the current rx buffer
-    jd_frame_t* txBuf; // holds the pointer to the current tx buffer
-    jd_frame_t* rxArray[JD_RX_ARRAY_SIZE];
-    jd_frame_t* txArray[JD_TX_ARRAY_SIZE];
-} busio_jacdac_buffer_obj_t;
 
 typedef struct {
     mp_obj_base_t base;
-    nrfx_uarte_t* uart;
-    nrfx_timer_t* timer;
     uint8_t pin;
     uint16_t sws_status;
     uint16_t status;
-
-    busio_jacdac_buffer_obj_t* buffer;
 
 } busio_jacdac_obj_t;
 
