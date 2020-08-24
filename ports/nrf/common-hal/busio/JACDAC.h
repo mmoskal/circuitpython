@@ -28,39 +28,20 @@
 #define MICROPY_INCLUDED_NRF_COMMON_HAL_BUSIO_JACDAC_H
 
 #include "common-hal/microcontroller/Pin.h"
-
-
 #include "py/obj.h"
 
 #include "nrfx_uarte.h"
 #include "nrf/timers.h"
 
-
+#define JD_RX_ARRAY_SIZE 10
+#define JD_TX_ARRAY_SIZE 10
 
 
 // 255 minus size of the serial header, rounded down to 4
 #define JD_SERIAL_PAYLOAD_SIZE 236
 
 
-
-
-
-
-
-
-/*****************************************************************/
-// implemented by SWS.h
-
-
-
-
-
-
-/*****************************************************************/
-// implemented by JACDAC.h
-
-
-
+// structure for a jacdac frame
 struct _jd_frame_t {
     uint16_t crc;
     uint8_t size;
@@ -73,15 +54,32 @@ struct _jd_frame_t {
 typedef struct _jd_frame_t jd_frame_t;
 
 
-
-typedef struct {
+typedef struct busio_jacdac_obj {
     mp_obj_base_t base;
     uint8_t pin;
-    uint16_t sws_status;
     uint16_t status;
 
+    nrfx_uarte_t* uarte;
+    nrfx_timer_t* timer;
+    uint8_t timer_refcount;
+
+    void (*tim_cb)(struct busio_jacdac_obj*);
+
+    uint8_t txHead;
+    uint8_t txTail;
+    uint8_t rxHead;
+    uint8_t rxTail;
+
+    jd_frame_t* rxArray[JD_RX_ARRAY_SIZE];
+    jd_frame_t* txArray[JD_TX_ARRAY_SIZE];
+
+    jd_frame_t* rx_buffer;
+    jd_frame_t* tx_buffer;
 } busio_jacdac_obj_t;
 
+typedef void (*cb_t)(busio_jacdac_obj_t*);
+
+/*
 typedef struct {
     uint32_t bus_state;
     uint32_t bus_lo_error;
@@ -92,25 +90,8 @@ typedef struct {
     uint32_t packets_dropped;
 } jd_diagnostics_t;
 jd_diagnostics_t *jd_get_diagnostics(void);
-
-
-typedef void (*cb_t)(void);
-
-/*
-
-// Provided by JACDAC_util.c
-uint32_t jd_random_around(uint32_t v);
-uint32_t jd_random(void);
-void jd_seed_random(uint32_t s);
-uint32_t jd_hash_fnv1a(const void *data, unsigned len);
-uint16_t jd_crc16(const void *data, uint32_t size);
-
-// Provided by JACDAC_timer.c
-void tim_init(void);
-void tim_callback(void* e);
-void tim_set_timer(int delta, cb_t cb);
-uint64_t tim_get_micros(void);
 */
+
 void jacdac_reset(void);
 
 

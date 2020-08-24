@@ -37,24 +37,20 @@
 #include "py/ioctl.h"
 #include "py/objproperty.h"
 #include "py/runtime.h"
-#include "py/stream.h"
 #include "supervisor/shared/translate.h"
 
-#define STREAM_DEBUG(...) (void)0
-// #define STREAM_DEBUG(...) mp_printf(&mp_plat_print __VA_OPT__(,) __VA_ARGS__)
 
 //| class JACDAC:
-//|     """A bidirectional serial protocol"""
-//|     def __init__(self, tx: microcontroller.Pin, receiver_buffer_size: int = 64) -> None:
+//|     """A bidirectional single wire serial protocol"""
+//|     def __init__(self, pin: microcontroller.Pin) -> None:
 //|         """A common bidirectional serial protocol that uses an an agreed upon speed
 //|         rather than a shared clock line.
 //|
-//|         :param ~microcontroller.Pin tx: the pin to transmit with, or ``None`` if this ``UART`` is receive-only.
-//|         :param int receiver_buffer_size: the character length of the read buffer (0 to disable). (When a character is 9 bits the buffer will be 2 * receiver_buffer_size bytes.)
+//|         :param ~microcontroller.Pin pin: the pin to transmit with.
 //|         ...
 //|
 STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    // Always initially allocate the UART object within the long-lived heap.
+    // Always initially allocate the UART (so also JACDAC) object within the long-lived heap.
     // This is needed to avoid crashes with certain UART implementations which
     // cannot accomodate being moved after creation. (See
     // https://github.com/adafruit/circuitpython/issues/1056)
@@ -65,6 +61,7 @@ STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, 
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_pin, MP_ARG_OBJ, {.u_obj = mp_const_none} },
     };
+
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
@@ -95,7 +92,7 @@ STATIC void check_for_deinit(busio_jacdac_obj_t *self) {
     }
 }
 
-//|     def __enter__(self) -> UART:
+//|     def __enter__(self) -> JACDAC:
 //|         """No-op used by Context Managers."""
 //|         ...
 //|
@@ -113,52 +110,6 @@ STATIC mp_obj_t busio_jacdac_obj___exit__(size_t n_args, const mp_obj_t *args) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(busio_jacdac___exit___obj, 4, 4, busio_jacdac_obj___exit__);
 
-// These are standard stream methods. Code is in py/stream.c.
-//
-//|     def receive(self):
-//|         """Read a single JACDAC packet.
-//|
-//|         :return: JACDAC packet
-//|         :rtype: bytes or None"""
-//|         ...
-//|
-
-//|     def send(self, buf: WriteableBuffer) -> Optional[int]:
-//|         """Write the buffer of bytes to the bus.
-//|
-//|       *New in CircuitPython 4.0:* ``buf`` must be bytes, not a string.
-//|
-//|         :return: the number of bytes written
-//|         :rtype: int or None"""
-//|         ...
-//|
-
-// These three methods are used by the shared stream methods.
-/*
-STATIC mp_uint_t busio_jacdac_receive(mp_obj_t self_in, void *buf_in, mp_uint_t len) {
-    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    check_for_deinit(self);
-    uint32_t *buf = buf_in;
-    return common_hal_busio_jacdac_receive(self, buf, len);
-}
-*/
-/*
-STATIC mp_uint_t busio_jacdac_send(mp_obj_t self_in, const void *buf_in, mp_uint_t len) {
-    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    check_for_deinit(self);
-    const uint32_t* buf = buf_in;
-    return common_hal_busio_jacdac_send(self, buf, len);
-}
-*/
-/*
-STATIC mp_obj_t busio_jacdac_send(mp_obj_t self_in, mp_uint_t *buf_in, mp_uint_t len) {
-    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(self_in);
-    check_for_deinit(self);
-    const uint32_t* buf = buf_in;
-    return MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_send(self, buf, len));
-}
-STATIC MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 3, busio_jacdac_send);
-*/
 
 
 
@@ -176,20 +127,22 @@ STATIC mp_obj_t busio_jacdac_send(size_t n_args, const mp_obj_t *pos_args, mp_ma
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
+    // setup buffer
     mp_buffer_info_t bufinfo;
     mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_READ);
     int32_t start = args[ARG_start].u_int;
     size_t length = bufinfo.len;
     normalize_buffer_bounds(&start, args[ARG_end].u_int, &length);
 
+    // empty buffer
     if (length == 0) {
         return mp_const_none;
     }
 
-    return MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_send(self, ((uint32_t*)bufinfo.buf) + start, length));
+    common_hal_busio_jacdac_send(self, ((uint8_t*)bufinfo.buf) + start, length);
+    return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 2, busio_jacdac_send);
-
 
 
 
@@ -207,19 +160,26 @@ STATIC mp_obj_t busio_jacdac_receive(size_t n_args, const mp_obj_t *pos_args, mp
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
+    // setup buffer
     mp_buffer_info_t bufinfo;
     mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_WRITE);
     int32_t start = args[ARG_start].u_int;
     size_t length = bufinfo.len;
     normalize_buffer_bounds(&start, args[ARG_end].u_int, &length);
 
+    // empty buffer
     if (length == 0) {
         return mp_const_none;
     }
 
-    return  MP_OBJ_NEW_SMALL_INT(common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length));
+    common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length);
+    return mp_const_none;
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_receive_obj, 2, busio_jacdac_receive);
+
+
+
+
 
 
 
@@ -230,9 +190,6 @@ STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
 
     { MP_ROM_QSTR(MP_QSTR_send),     MP_ROM_PTR(&busio_jacdac_send_obj) },
     { MP_ROM_QSTR(MP_QSTR_receive),  MP_ROM_PTR(&busio_jacdac_receive_obj) },
-
-    // Properties
-    //{ MP_ROM_QSTR(MP_QSTR_packets),     MP_ROM_PTR(&busio_jacdac_packets_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(busio_jacdac_locals_dict, busio_jacdac_locals_dict_table);
 

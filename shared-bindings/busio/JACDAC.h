@@ -33,15 +33,14 @@
 
 extern const mp_obj_type_t busio_jacdac_type;
 
+
 // Construct an underlying UART object.
 extern void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pin_obj_t * pin);
 
 extern void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context);
 extern bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context);
 
-
-
-extern uint8_t common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint32_t *data, size_t len);
-extern uint8_t common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
+extern void common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint8_t *data, size_t len);
+extern void common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
 
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BUSIO_JACDAC_H
