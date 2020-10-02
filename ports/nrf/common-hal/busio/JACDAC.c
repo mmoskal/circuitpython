@@ -43,6 +43,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define JD_LOG_SIZE     512
+volatile uint32_t jd_log[JD_LOG_SIZE] = {0};
+static uint32_t logidx = 0;
+
+static inline void log_char(char c) {
+    jd_log[logidx] = c;
+    logidx = (logidx + 1) % JD_LOG_SIZE;
+}
+
 
 #define JD_FRAME_SIZE(pkt) ((pkt)->size + 12)
 #define JD_PERIPHERALS 2
@@ -57,6 +66,8 @@
 #define RX_CONFIGURED 0x08
 
 #define TX_PENDING 0x10
+
+busio_jacdac_obj_t* jd_instance = NULL;
 
 
 static void set_timer_for_ticks(busio_jacdac_obj_t* self);
@@ -137,35 +148,26 @@ static void led4Toggle(void) {
 */
 
 
-static busio_jacdac_obj_t* peripherals[JD_PERIPHERALS];
-static void allocate_peripheral(busio_jacdac_obj_t* peripheral) {
-    for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
-        if (peripherals[i] == NULL) {
-            peripherals[i] = peripheral;
-            return;
-        }
-    }
+// static busio_jacdac_obj_t* peripherals[JD_PERIPHERALS];
+// static void allocate_peripheral(busio_jacdac_obj_t* peripheral) {
+//     for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
+//         if (peripherals[i] == NULL) {
+//             peripherals[i] = peripheral;
+//             return;
+//         }
+//     }
 
-    mp_raise_RuntimeError(translate("All JACDAC peripherals in use"));
-}
+//     mp_raise_RuntimeError(translate("All JACDAC peripherals in use"));
+// }
 
-static void free_peripheral(busio_jacdac_obj_t* peripheral) {
-    for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
-        if (peripherals[i] != NULL && peripherals[i]->pin == peripheral->pin) {
-            peripherals[i] = NULL;
-            return;
-        }
-    }
-}
-
-static busio_jacdac_obj_t* get_peripheral(uint32_t pin) {
-    for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
-        if (peripherals[i] != NULL && peripherals[i]->pin == pin) {
-            return peripherals[i];
-        }
-    }
-    return NULL;
-}
+// static void free_peripheral(busio_jacdac_obj_t* peripheral) {
+//     for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
+//         if (peripherals[i] != NULL && peripherals[i]->pin == peripheral->pin) {
+//             peripherals[i] = NULL;
+//             return;
+//         }
+//     }
+// }
 
 static nrfx_uarte_t nrfx_uartes[] = {
 #if NRFX_CHECK(NRFX_UARTE0_ENABLED)
@@ -183,7 +185,6 @@ static nrfx_uarte_t nrfx_uartes[] = {
 
 
 static int8_t irq_disabled;
-static uint32_t seed;
 
 static void target_enable_irq(void) {
     irq_disabled--;
@@ -212,31 +213,6 @@ static void target_panic(void) {
     while (1) {}
 }
 
-static void seed_random(uint32_t s) {
-    seed = (seed * 0x1000193) ^ s;
-}
-
-static uint32_t get_random(void) {
-    if (seed == 0)
-        seed_random(13);
-
-    // xorshift algorithm
-    uint32_t x = seed;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    seed = x;
-    return x;
-}
-
-// return v +/- 25% or so
-static uint32_t random_around(uint32_t v) {
-    uint32_t mask = 0xfffffff;
-    while (mask > v)
-        mask >>= 1;
-    return (v - (mask >> 1)) + (get_random() & mask);
-}
-
 static uint16_t jd_crc16(const void *data, uint32_t size) {
     const uint8_t *ptr = (const uint8_t *)data;
     uint16_t crc = 0xffff;
@@ -262,29 +238,12 @@ static uint16_t jd_crc16(const void *data, uint32_t size) {
 
 
 static void gpio_set(busio_jacdac_obj_t* self, uint32_t value) {
-    if (nrf_gpio_pin_dir_get(self->pin) != NRF_GPIO_PIN_DIR_OUTPUT)
-        nrf_gpio_cfg_output(self->pin);
+    nrf_gpio_cfg_output(self->pin);
     nrf_gpio_pin_write(self->pin, value);
 }
 
 static uint32_t gpio_get(busio_jacdac_obj_t* self) {
-    if (nrf_gpio_pin_dir_get(self->pin) != NRF_GPIO_PIN_DIR_INPUT)
-        nrf_gpio_cfg_input(self->pin, NRF_GPIO_PIN_PULLUP);
-    return nrf_gpio_pin_read(self->pin);
-}
-
-static uint32_t gpio_get_and_set(busio_jacdac_obj_t* self, uint32_t value) {
-    // set output but connect input buffer
-    nrf_gpio_cfg(
-        self->pin,
-        NRF_GPIO_PIN_DIR_OUTPUT,
-        NRF_GPIO_PIN_INPUT_CONNECT,
-        NRF_GPIO_PIN_PULLUP,
-        NRF_GPIO_PIN_S0S1,
-        NRF_GPIO_PIN_NOSENSE);
-
-    nrf_gpio_pin_write(self->pin, value);
-
+    nrf_gpio_cfg_input(self->pin, NRF_GPIO_PIN_PULLUP);
     return nrf_gpio_pin_read(self->pin);
 }
 
@@ -301,6 +260,47 @@ static inline void disable_gpio_interrupts(busio_jacdac_obj_t* self) {
     nrfx_gpiote_in_event_disable(self->pin);
 }
 
+
+jd_frame_t* buffer_from_pool(busio_jacdac_obj_t* self) {
+    jd_frame_t* ret = NULL;
+
+    __disable_irq();
+    for (int i = 0; i < JD_POOL_SIZE; i++)
+        if (self->buffer_pool[i])
+        {
+            ret = self->buffer_pool[i];
+            self->buffer_pool[i] = NULL;
+            break;
+        }
+    __enable_irq();
+
+    return ret;
+}
+
+void move_to_rx_queue(busio_jacdac_obj_t* self, jd_frame_t* f) {
+    int i;
+
+    for (i = 0; i < JD_RX_SIZE; i++)
+        if (self->rx_queue[i] == NULL)
+        {
+            self->rx_queue[i] = f;
+            break;
+        }
+
+    if (i == JD_RX_SIZE)
+        target_panic();
+}
+
+void return_buffer_to_pool(busio_jacdac_obj_t* self, jd_frame_t* buf) {
+    __disable_irq();
+    for (int i = 0; i < JD_POOL_SIZE; i++)
+        if (self->buffer_pool[i] == NULL)
+        {
+            self->buffer_pool[i] = buf;
+            break;
+        }
+    __enable_irq();
+}
 
 /*************************************************************************************
 *   Status helper
@@ -418,65 +418,8 @@ static inline void set_pin_gpio(busio_jacdac_obj_t* self) {
 
 
 /*************************************************************************************
-*   Buffers
+*   Receiving
 */
-
-
-// FIFO circular buffers.
-static jd_frame_t* popRxArray(busio_jacdac_obj_t* self) {
-    // nothing to pop
-    if (self->rxTail == self->rxHead)
-        return NULL;
-
-    target_disable_irq();
-    uint8_t nextHead = (self->rxHead + 1) % JD_RX_ARRAY_SIZE;
-    jd_frame_t* p = self->rxArray[self->rxHead];
-    self->rxArray[self->rxHead] = NULL;
-    self->rxHead = nextHead;
-    target_enable_irq();
-
-    return p;
-}
-
-// FIFO circular buffers.
-static jd_frame_t* popTxArray(busio_jacdac_obj_t* self) {
-    // nothing to pop
-    if (self->txTail == self->txHead)
-        return NULL;
-
-
-    target_disable_irq();
-    uint8_t nextHead = (self->txHead + 1) % JD_TX_ARRAY_SIZE;
-    jd_frame_t* p = self->txArray[self->txHead];
-    self->txArray[self->txHead] = NULL;
-    self->txHead = nextHead;
-    target_enable_irq();
-
-    return p;
-}
-
-
-/*************************************************************************************
-*   JACDAC - reveiving
-*/
-
-
-static bool save_and_create_new_frame(busio_jacdac_obj_t* self) {
-    uint8_t nextTail = (self->rxTail + 1) % JD_RX_ARRAY_SIZE;
-
-    if (nextTail == self->rxHead)
-        return false;
-
-    self->rxArray[self->rxTail] = self->rx_buffer;
-    self->rx_buffer = m_new_obj(jd_frame_t);
-
-    target_disable_irq();
-    self->rxTail = nextTail;
-    target_enable_irq();
-
-    return true;
-}
-
 static void stop_rx(busio_jacdac_obj_t* self) {
     disable_tx_interrupts(self);
     disable_rx_interrupts(self);
@@ -509,22 +452,16 @@ static void setup_rx_timeout(busio_jacdac_obj_t* self) {
 }
 
 static void start_rx(busio_jacdac_obj_t* self) {
+    log_char('L');
     if (is_status(self, RX_ACTIVE))
         target_panic();
+
+    disable_gpio_interrupts(self);
     set_status(self, RX_ACTIVE);
 
-    // reset buffer
-    self->rx_buffer->crc = 0;
-    self->rx_buffer->size = 0;
-    self->rx_buffer->flags = 0;
-
-    // wait for the high pulse
-    int timeout = 1000; // should be around 100-1000us
-    while (timeout-- > 0 && gpio_get(self) == 0);
-    if (timeout <= 0) {
-        rx_timeout(self);
-        return;
-    }
+    // TODO set timer for ticks.
+    gpio_get(self);
+    while(nrf_gpio_pin_read(self->pin) == 0);
 
     set_pin_rx(self);
 
@@ -532,12 +469,14 @@ static void start_rx(busio_jacdac_obj_t* self) {
     nrfx_uarte_rx(self->uarte, (uint8_t*) self->rx_buffer, sizeof(jd_frame_t));
 
     set_timer(self, 200, setup_rx_timeout);
-    
+
     target_enable_irq();
 }
 
 static void rx_done(busio_jacdac_obj_t *self) {
     led4Toggle(); // TODO debug remove
+
+    log_char('P');
 
     disable_rx_interrupts(self);
 
@@ -546,7 +485,9 @@ static void rx_done(busio_jacdac_obj_t *self) {
 
     set_pin_gpio(self);
     clr_status(self, RX_ACTIVE);
-    set_timer_for_ticks(self);
+
+    gpio_get(self);
+    while(nrf_gpio_pin_read(self->pin) == 0);
 
 
     // check size
@@ -554,6 +495,8 @@ static void rx_done(busio_jacdac_obj_t *self) {
     uint32_t declaredSize = JD_FRAME_SIZE(self->rx_buffer);
     if (txSize < declaredSize) {
         //jd_diagnostics.bus_uart_error++;
+        log_char('V');
+        enable_gpio_interrupts(self);
         return;
     }
 
@@ -561,16 +504,18 @@ static void rx_done(busio_jacdac_obj_t *self) {
     uint16_t crc = jd_crc16((uint8_t *)self->rx_buffer + 2, declaredSize - 2);
     if (crc != self->rx_buffer->crc) {
         //.bus_uart_error++;
+        log_char('M');
+        target_panic();
+        enable_gpio_interrupts(self);
         return;
     }
 
-    save_and_create_new_frame(self);
-    //jd_diagnostics.packets_received++;
-    //if (!save_and_create_new_frame(self))
-    //    jd_diagnostics.packets_dropped++;
+    jd_frame_t* rx = self->rx_buffer;
+    self->rx_buffer = buffer_from_pool(self);
+
+    move_to_rx_queue(self, rx);
 
     stop_rx(self);
-
     // restart normal operation
     enable_gpio_interrupts(self);
 }
@@ -579,89 +524,6 @@ static void rx_done(busio_jacdac_obj_t *self) {
 /*************************************************************************************
 *   JACDAC - transmitting
 */
-
-
-// check if we are in the correct state to start a transmission
-static bool start_tx_state_correct(busio_jacdac_obj_t* self) {
-    target_disable_irq();
-
-    // already transmitting?
-    if (is_status(self, TX_ACTIVE)) {
-        target_panic();
-        return false;
-    }
-
-    // already receiving?
-    if (is_status(self, RX_ACTIVE)) {
-        target_enable_irq();
-        //jd_diagnostics.bus_lo_error++;
-        return false;
-    }
-    set_status(self, TX_ACTIVE);
-
-    target_enable_irq();
-
-    return true;
-}
-
-static void start_tx(busio_jacdac_obj_t* self) {
-    if (!start_tx_state_correct(self))
-        return;
-
-    // retrieve a frame from the buffer
-    clr_status(self, TX_PENDING);
-    if (!self->tx_buffer) {
-        self->tx_buffer = popTxArray(self);
-        if (self->tx_buffer == NULL) {
-            clr_status(self, TX_ACTIVE);
-            set_timer_for_ticks(self);
-            return;
-        }
-    }
-
-    target_disable_irq();
-
-    disable_gpio_interrupts(self);
-    uint32_t val = gpio_get(self);
-
-    target_enable_irq();
-
-    // try to pull the line low, provided it currently reads as high
-    if (val == 0 || gpio_get_and_set(self, 0)) {
-        // we failed - the line was low - start reception
-        // start_rx() would normally execute from EXTI, which has high
-        // priority - we simulate this by completely disabling IRQs
-        target_disable_irq();
-        start_rx(self);
-        target_enable_irq();
-        
-        //jd_diagnostics.bus_lo_error++;
-        clr_status(self, TX_ACTIVE);
-        set_timer_for_ticks(self);
-
-        set_status(self, TX_PENDING);
-        return;
-    }
-
-    // start pulse (11-15µs)
-    common_hal_mcu_delay_us(10);
-
-    // start-data gap (40-89µs)
-    gpio_set(self, 1);
-    common_hal_mcu_delay_us(37);
-
-    // setup UART tx
-    set_pin_tx(self);
-    nrfx_uarte_tx(self->uarte, (uint8_t*) self->tx_buffer, JD_FRAME_SIZE(self->tx_buffer));
-
-    // Wait for write to complete.
-    while (nrfx_uarte_tx_in_progress(self->uarte))
-        RUN_BACKGROUND_TASKS;
-
-    // cleanup and resume idle behavior
-    gc_free(self->tx_buffer);
-    set_timer_for_ticks(self);
-}
 
 static void tx_done(busio_jacdac_obj_t *self) {
     disable_tx_interrupts(self);
@@ -676,11 +538,10 @@ static void tx_done(busio_jacdac_obj_t *self) {
     common_hal_mcu_delay_us(11);
     gpio_set(self, 1);
 
-    self->tx_buffer = NULL;
+    uart_configure_tx(self, 0);
 
     // restart idle operation
     clr_status(self, TX_ACTIVE);
-    set_timer_for_ticks(self);
 
     enable_gpio_interrupts(self);
 }
@@ -689,8 +550,6 @@ static void tx_done(busio_jacdac_obj_t *self) {
 /*************************************************************************************
 *   Timers
 */
-
-
 static void tick(busio_jacdac_obj_t* self) {
     led1Toggle(); // TODO debug remove
     set_timer_for_ticks(self);
@@ -713,10 +572,7 @@ static void set_timer_for_ticks(busio_jacdac_obj_t* self) {
     target_disable_irq();
 
     if (!is_status(self, RX_ACTIVE)) {
-        if (is_status(self, TX_PENDING) && !is_status(self, TX_ACTIVE))
-            set_timer(self, random_around(150), start_tx);
-        else
-            set_timer(self, 10000, tick);
+        set_timer(self, 10000, tick);
     }
 
     target_enable_irq();
@@ -735,7 +591,7 @@ static void uart_irq(const nrfx_uarte_event_t* event, void* context) {
     switch ( event->type ) {
         case NRFX_UARTE_EVT_RX_DONE:
             led4Toggle(); // TODO debug remove
-            rx_done(self);
+            // rx_done(self);
             break;
 
         case NRFX_UARTE_EVT_TX_DONE:
@@ -755,6 +611,7 @@ static void uart_irq(const nrfx_uarte_event_t* event, void* context) {
 
 // interrupt handler for timers
 static void timer_irq(nrf_timer_event_t event_type, void* context) {
+    log_char('o');
     busio_jacdac_obj_t* self = (busio_jacdac_obj_t*) context;
 
     if (event_type == NRF_TIMER_EVENT_COMPARE0) {
@@ -768,32 +625,14 @@ static void timer_irq(nrf_timer_event_t event_type, void* context) {
 
 // interrupt handler for GPIO
 static void gpiote_callback(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    busio_jacdac_obj_t* self = get_peripheral(pin);
-
-    if (self == NULL)
-        mp_raise_RuntimeError(translate("JACDAC peripheral not created"));
-
-    if (gpio_is_output(self))
-        return;
-
-    disable_gpio_interrupts(self);
-    start_rx(self);
+    if (jd_instance && pin == jd_instance->pin && !is_status(jd_instance, TX_ACTIVE))
+        start_rx(jd_instance);
 }
 
 
 /*************************************************************************************
 *   Initialization
 */
-
-
-static void initialize_buffers(busio_jacdac_obj_t *self) {
-    memset(self->rxArray, 0, sizeof(jd_frame_t*) * JD_RX_ARRAY_SIZE);
-    memset(self->txArray, 0, sizeof(jd_frame_t*) * JD_TX_ARRAY_SIZE);
-    self->txTail = 0;
-    self->txHead = 0;
-    self->rxTail = 0;
-    self->rxHead = 0;
-}
 
 static void initialize_gpio(busio_jacdac_obj_t *self) {
 
@@ -805,6 +644,7 @@ static void initialize_gpio(busio_jacdac_obj_t *self) {
         .skip_gpio_setup = false
     };
 
+    nrfx_gpiote_init(0);
     nrfx_gpiote_in_init(self->pin, &cfg, gpiote_callback);
     nrfx_gpiote_in_event_enable(self->pin, true);
 
@@ -812,6 +652,7 @@ static void initialize_gpio(busio_jacdac_obj_t *self) {
 }
 
 static void initialize_timer(busio_jacdac_obj_t *self) {
+    log_char('T');
     if (self->timer_refcount == 0) {
         self->timer = nrf_peripherals_allocate_timer();
         if (self->timer == NULL) {
@@ -828,7 +669,7 @@ static void initialize_timer(busio_jacdac_obj_t *self) {
         };
 
         nrfx_timer_init(self->timer, &timer_config, &timer_irq);
-        nrfx_timer_enable(self->timer);
+        // nrfx_timer_enable(self->timer);
     }
     self->timer_refcount++;
 
@@ -868,13 +709,31 @@ static void initialize_uart(busio_jacdac_obj_t *self) {
 *   Public JACDAC methods
 */
 
-
 void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_obj_t* pin) {
+
+    // if (jd_instance) {
+    //     self = jd_instance;
+    //     return;
+    // }
+
+    log_char('A');
+
+    jd_instance = self;
+
     self->pin = pin->number;
     self->status = 0;
-    self->rx_buffer = m_new_obj(jd_frame_t);
+    self->tim_cb = NULL;
 
-    allocate_peripheral(self);
+    for (int i = 0; i < JD_POOL_SIZE; i++)
+        self->buffer_pool[i] = m_malloc(sizeof(jd_frame_t), true);
+
+    for (int i = 0; i < JD_RX_SIZE; i++)
+        self->rx_queue[i] = NULL;
+
+    self->rx_buffer = buffer_from_pool(self);
+    self->tx_buffer = m_malloc(sizeof(jd_frame_t), true);
+
+    // allocate_peripheral(self);
 
     // TODO debug remove
     led1Toggle();
@@ -890,15 +749,18 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_o
     claim_pin(pin);
     initialize_timer(self);
     initialize_gpio(self);
-    initialize_buffers(self);
     initialize_uart(self);
 
     set_timer_for_ticks(self);
+
+    log_char('B');
 }
 
 
 void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t* self) {
-    free_peripheral(self);
+
+    log_char('D');
+    // free_peripheral(self);
 
     if (common_hal_busio_jacdac_deinited(self))
         return;
@@ -925,67 +787,83 @@ bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *self) {
     return self->pin == NO_PIN;
 }
 
-void common_hal_busio_jacdac_send(busio_jacdac_obj_t *self, const uint8_t *data, size_t len) {
-    jd_frame_t* frame = m_new_ll_obj(jd_frame_t);
+int common_hal_busio_jacdac_send(busio_jacdac_obj_t *self, const uint8_t *data, size_t len) {
+    if ((self->status & TX_ACTIVE) || (self->status & RX_ACTIVE))
+        target_panic();
 
-    frame->size = 16;
-    frame->flags = 0;
-    frame->device_identifier = 0x747E48326EB44CF8;
-    frame->data[0] = 12;
+    log_char('C');
 
-    uint32_t declaredSize = JD_FRAME_SIZE(frame);
-    frame->crc = jd_crc16((uint8_t *)frame + 2, declaredSize - 2);
+    // try to pull the line low, provided it currently reads as high
+    if (gpio_get(self) == 0) {
+        clr_status(self, TX_ACTIVE);
+        return -1;
+    }
 
+    disable_gpio_interrupts(self);
+    gpio_set(self, 0);
+    // start pulse (11-15µs)
+    common_hal_mcu_delay_us(9);
+    set_status(self, TX_ACTIVE);
 
-    uint8_t nextTail = (self->txTail + 1) % JD_TX_ARRAY_SIZE;
-    if (nextTail == self->txHead)
-        return;
+    // start-data gap (40-89µs)
+    gpio_set(self, 1);
+    *(uint16_t*)data = jd_crc16((uint8_t *)data + 2, len - 2);
+    common_hal_mcu_delay_us(19);
+    log_char((char)len);
+    memcpy(self->tx_buffer, data, MIN(len, 254));
 
-    self->txArray[self->txTail] = frame;
-
-    target_disable_irq();
-
-    self->txTail = nextTail;
-
-    // notify that a new frame is present
-    set_status(self, TX_PENDING);
-    if (!is_status(self, ACTIVE))
-        set_timer_for_ticks(self);
-
-    target_enable_irq();
+    // setup UART tx
+    set_pin_tx(self);
+    nrfx_uarte_tx(self->uarte, (uint8_t*) self->tx_buffer, MIN(len, 254));
+    return 0;
 }
 
-void common_hal_busio_jacdac_receive(busio_jacdac_obj_t *self, uint8_t *data, size_t len) {
-    jd_frame_t* t = popRxArray(self);
+int common_hal_busio_jacdac_receive(busio_jacdac_obj_t *self, uint8_t *data, size_t len) {
 
-    if (t != NULL)
-        memcpy(data, t, sizeof(*t));
+    jd_frame_t *f = NULL;
 
-    gc_free(t);
+    __disable_irq();
+    for (int i = 0; i < JD_RX_SIZE; i++)
+        if (self->rx_queue[i])
+        {
+            f = self->rx_queue[i];
+            self->rx_queue[i] = NULL;
+            break;
+        }
+    __enable_irq();
+
+    if (f)
+    {
+        memcpy(data, f, sizeof(jd_frame_t));
+        return_buffer_to_pool(self, f);
+        return 1;
+    }
+
+    return 0;
 }
 
 void jacdac_reset(void) {
-
+    log_char('R');
     // reset gpiote
-    if ( nrfx_gpiote_is_init() ) {
-        nrfx_gpiote_uninit();
-    }
-    nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
+    // if ( nrfx_gpiote_is_init() ) {
+    //     nrfx_gpiote_uninit();
+    // }
+    // nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
 
 
-    // free all peripherals
-    for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
+    // // free all peripherals
+    // for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
 
-        // reset timers
-        if (peripherals[i]->timer != NULL)
-            nrf_peripherals_free_timer(peripherals[i]->timer);
-        peripherals[i]->timer_refcount = 0;
+    //     // reset timers
+    //     if (peripherals[i]->timer != NULL)
+    //         nrf_peripherals_free_timer(peripherals[i]->timer);
+    //     peripherals[i]->timer_refcount = 0;
 
 
-        peripherals[i] = NULL;
-    }
+    //     peripherals[i] = NULL;
+    // }
 
-    // reset uart
-    for (size_t i = 0 ; i < MP_ARRAY_SIZE(nrfx_uartes); i++)
-        nrfx_uarte_uninit(&nrfx_uartes[i]);
+    // // reset uart
+    // for (size_t i = 0 ; i < MP_ARRAY_SIZE(nrfx_uartes); i++)
+    //     nrfx_uarte_uninit(&nrfx_uartes[i]);
 }
