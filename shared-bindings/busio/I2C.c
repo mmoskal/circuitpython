@@ -39,7 +39,7 @@
 //| class I2C:
 //|     """Two wire serial protocol"""
 //|
-//|     def __init__(self, scl: microcontroller.Pin, sda: microcontroller.Pin, *, frequency: int = 400000, timeout: int = 255) -> None:
+//|     def __init__(self, scl: microcontroller.Pin, sda: microcontroller.Pin, *, frequency: int = 100000, timeout: int = 255) -> None:
 //|
 //|         """I2C is a two-wire protocol for communicating between devices.  At the
 //|         physical level it consists of 2 wires: SCL and SDA, the clock and data
@@ -70,7 +70,7 @@ STATIC mp_obj_t busio_i2c_make_new(const mp_obj_type_t *type, size_t n_args, con
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_scl, MP_ARG_REQUIRED | MP_ARG_OBJ },
         { MP_QSTR_sda, MP_ARG_REQUIRED | MP_ARG_OBJ },
-        { MP_QSTR_frequency, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 400000} },
+        { MP_QSTR_frequency, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 100000} },
         { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 255} },
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
@@ -125,7 +125,7 @@ static void check_lock(busio_i2c_obj_t *self) {
     }
 }
 
-//|     def scan(self) -> list:
+//|     def scan(self) -> List[int]:
 //|         """Scan all I2C addresses between 0x08 and 0x77 inclusive and return a
 //|         list of those that respond.
 //|
@@ -185,7 +185,7 @@ MP_DEFINE_CONST_FUN_OBJ_1(busio_i2c_unlock_obj, busio_i2c_obj_unlock);
 //|         ``buf[start:end]`` will so it saves memory.
 //|
 //|         :param int address: 7-bit device address
-//|         :param bytearray buffer: buffer to write into
+//|         :param ~_typing.WriteableBuffer buffer: buffer to write into
 //|         :param int start: Index to start writing at
 //|         :param int end: Index to write up to but not include. Defaults to ``len(buffer)``"""
 //|         ...
@@ -239,7 +239,7 @@ MP_DEFINE_CONST_FUN_OBJ_KW(busio_i2c_readfrom_into_obj, 3, busio_i2c_readfrom_in
 //|         to poll for the existence of a device.
 //|
 //|         :param int address: 7-bit device address
-//|         :param bytearray buffer: buffer containing the bytes to write
+//|         :param ~_typing.ReadbleBuffer buffer: buffer containing the bytes to write
 //|         :param int start: Index to start writing from
 //|         :param int end: Index to read up to but not include. Defaults to ``len(buffer)``"""
 //|         ...
@@ -291,8 +291,8 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(busio_i2c_writeto_obj, 1, busio_i2c_writeto);
 //|         will so it saves memory.
 //|
 //|         :param int address: 7-bit device address
-//|         :param bytearray out_buffer: buffer containing the bytes to write
-//|         :param bytearray in_buffer: buffer to write into
+//|         :param ~_typing.ReadbleBuffer out_buffer: buffer containing the bytes to write
+//|         :param ~_typing.WriteableBuffer in_buffer: buffer to write into
 //|         :param int out_start: Index to start writing from
 //|         :param int out_end: Index to read up to but not include. Defaults to ``len(buffer)``
 //|         :param int in_start: Index to start writing at

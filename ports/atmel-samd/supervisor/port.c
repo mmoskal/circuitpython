@@ -44,6 +44,9 @@
 #include "hri/hri_pm_d21.h"
 #elif defined(SAME54)
 #include "hri/hri_rstc_e54.h"
+#elif defined(SAME51)
+#include "sam.h"
+#include "hri/hri_rstc_e51.h"
 #elif defined(SAMD51)
 #include "hri/hri_rstc_d51.h"
 #else
@@ -59,7 +62,7 @@
 #include "common-hal/microcontroller/Pin.h"
 #include "common-hal/pulseio/PulseIn.h"
 #include "common-hal/pulseio/PulseOut.h"
-#include "common-hal/pulseio/PWMOut.h"
+#include "common-hal/pwmio/PWMOut.h"
 #include "common-hal/ps2io/Ps2.h"
 #include "common-hal/rtc/RTC.h"
 
@@ -335,6 +338,8 @@ void reset_port(void) {
 #if CIRCUITPY_PULSEIO
     pulsein_reset();
     pulseout_reset();
+#endif
+#if CIRCUITPY_PWMIO
     pwmout_reset();
 #endif
 

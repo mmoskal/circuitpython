@@ -38,16 +38,25 @@
 #include "common-hal/busio/UART.h"
 #endif
 #if CIRCUITPY_PULSEIO
-#include "common-hal/pulseio/PWMOut.h"
 #include "common-hal/pulseio/PulseOut.h"
 #include "common-hal/pulseio/PulseIn.h"
+#endif
+#if CIRCUITPY_PWMIO
+#include "common-hal/pwmio/PWMOut.h"
+#endif
+#if CIRCUITPY_PULSEIO || CIRCUITPY_PWMIO
 #include "timers.h"
+#endif
+#if CIRCUITPY_SDIOIO
+#include "common-hal/sdioio/SDCard.h"
 #endif
 
 #include "clocks.h"
 #include "gpio.h"
 
 #include STM32_HAL_H
+
+void NVIC_SystemReset(void) NORETURN;
 
 #if (CPY_STM32H7) || (CPY_STM32F7)
 
@@ -224,16 +233,23 @@ void reset_port(void) {
     spi_reset();
     uart_reset();
 #endif
-#if CIRCUITPY_PULSEIO
+#if CIRCUITPY_SDIOIO
+    sdioio_reset();
+#endif
+#if CIRCUITPY_PULSEIO || CIRCUITPY_PWMIO
     timers_reset();
-    pwmout_reset();
+#endif
+#if CIRCUITPY_PULSEIO
     pulseout_reset();
     pulsein_reset();
+#endif
+#if CIRCUITPY_PWMIO
+    pwmout_reset();
 #endif
 }
 
 void reset_to_bootloader(void) {
-
+    NVIC_SystemReset();
 }
 
 void reset_cpu(void) {
