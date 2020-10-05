@@ -81,8 +81,8 @@
 //|         of the display to minimize tearing artifacts.
 //|
 //|         :param display_bus: The bus that the display is connected to
-//|         :type display_bus: FourWire, ParallelBus or I2CDisplay
-//|         :param buffer init_sequence: Byte-packed initialization sequence.
+//|         :type _DisplayBus: FourWire, ParallelBus or I2CDisplay
+//|         :param ~_typing.ReadableBuffer init_sequence: Byte-packed initialization sequence.
 //|         :param int width: Width in pixels
 //|         :param int height: Height in pixels
 //|         :param int colstart: The index if the first visible column
@@ -105,13 +105,22 @@
 //|         :param bool auto_brightness: If True, brightness is controlled via an ambient light sensor or other mechanism.
 //|         :param bool single_byte_bounds: Display column and row commands use single bytes
 //|         :param bool data_as_commands: Treat all init and boundary data as SPI commands. Certain displays require this.
+//|         :param bool SH1107_addressing: Special quirk for SH1107, use upper/lower column set and page set
 //|         :param bool auto_refresh: Automatically refresh the screen
 //|         :param int native_frames_per_second: Number of display refreshes per second that occur with the given init_sequence.
 //|         :param bool backlight_on_high: If True, pulling the backlight pin high turns the backlight on."""
 //|         ...
 //|
-STATIC mp_obj_t displayio_display_make_new(const mp_obj_type_t *type, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    enum { ARG_display_bus, ARG_init_sequence, ARG_width, ARG_height, ARG_colstart, ARG_rowstart, ARG_rotation, ARG_color_depth, ARG_grayscale, ARG_pixels_in_byte_share_row, ARG_bytes_per_cell, ARG_reverse_pixels_in_byte, ARG_reverse_bytes_in_word, ARG_set_column_command, ARG_set_row_command, ARG_write_ram_command, ARG_set_vertical_scroll, ARG_backlight_pin, ARG_brightness_command, ARG_brightness, ARG_auto_brightness, ARG_single_byte_bounds, ARG_data_as_commands, ARG_auto_refresh, ARG_native_frames_per_second, ARG_backlight_on_high };
+STATIC mp_obj_t displayio_display_make_new(const mp_obj_type_t *type, size_t n_args,
+                const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_display_bus, ARG_init_sequence, ARG_width, ARG_height, ARG_colstart, ARG_rowstart,
+                ARG_rotation, ARG_color_depth, ARG_grayscale, ARG_pixels_in_byte_share_row,
+                ARG_bytes_per_cell, ARG_reverse_pixels_in_byte, ARG_reverse_bytes_in_word,
+                ARG_set_column_command, ARG_set_row_command, ARG_write_ram_command,
+                ARG_set_vertical_scroll, ARG_backlight_pin, ARG_brightness_command,
+                ARG_brightness, ARG_auto_brightness, ARG_single_byte_bounds, ARG_data_as_commands,
+                ARG_auto_refresh, ARG_native_frames_per_second, ARG_backlight_on_high,
+                ARG_SH1107_addressing };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_display_bus, MP_ARG_REQUIRED | MP_ARG_OBJ },
         { MP_QSTR_init_sequence, MP_ARG_REQUIRED | MP_ARG_OBJ },
@@ -139,6 +148,7 @@ STATIC mp_obj_t displayio_display_make_new(const mp_obj_type_t *type, size_t n_a
         { MP_QSTR_auto_refresh, MP_ARG_BOOL | MP_ARG_KW_ONLY, {.u_bool = true} },
         { MP_QSTR_native_frames_per_second, MP_ARG_INT | MP_ARG_KW_ONLY, {.u_int = 60} },
         { MP_QSTR_backlight_on_high, MP_ARG_BOOL | MP_ARG_KW_ONLY, {.u_bool = true} },
+        { MP_QSTR_SH1107_addressing, MP_ARG_BOOL | MP_ARG_KW_ONLY, {.u_bool = false} }
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
@@ -180,7 +190,8 @@ STATIC mp_obj_t displayio_display_make_new(const mp_obj_type_t *type, size_t n_a
         args[ARG_data_as_commands].u_bool,
         args[ARG_auto_refresh].u_bool,
         args[ARG_native_frames_per_second].u_int,
-        args[ARG_backlight_on_high].u_bool
+        args[ARG_backlight_on_high].u_bool,
+        args[ARG_SH1107_addressing].u_bool
         );
 
     return self;
@@ -215,28 +226,33 @@ STATIC mp_obj_t displayio_display_obj_show(mp_obj_t self_in, mp_obj_t group_in) 
 }
 MP_DEFINE_CONST_FUN_OBJ_2(displayio_display_show_obj, displayio_display_obj_show);
 
-//|     def refresh(self, *, target_frames_per_second: int = 60, minimum_frames_per_second: int = 1) -> bool:
+//|     def refresh(self, *, target_frames_per_second: Optional[int] = None, minimum_frames_per_second: int = 1) -> bool:
 //|         """When auto refresh is off, waits for the target frame rate and then refreshes the display,
 //|         returning True. If the call has taken too long since the last refresh call for the given
 //|         target frame rate, then the refresh returns False immediately without updating the screen to
 //|         hopefully help getting caught up.
 //|
 //|         If the time since the last successful refresh is below the minimum frame rate, then an
-//|         exception will be raised. Set minimum_frames_per_second to 0 to disable.
+//|         exception will be raised. Set ``minimum_frames_per_second`` to 0 to disable.
+//|
+//|         When auto refresh is off, ``display.refresh()`` or ``display.refresh(target_frames_per_second=None)``
+//|         will update the display immediately.
 //|
 //|         When auto refresh is on, updates the display immediately. (The display will also update
 //|         without calls to this.)
 //|
 //|         :param int target_frames_per_second: How many times a second `refresh` should be called and the screen updated.
+//|             Set to `None` for immediate refresh.
 //|         :param int minimum_frames_per_second: The minimum number of times the screen should be updated per second."""
 //|         ...
 //|
 STATIC mp_obj_t displayio_display_obj_refresh(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
     enum { ARG_target_frames_per_second, ARG_minimum_frames_per_second };
     static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_target_frames_per_second, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 60} },
+        { MP_QSTR_target_frames_per_second, MP_ARG_OBJ | MP_ARG_KW_ONLY, {.u_obj = mp_const_none} },
         { MP_QSTR_minimum_frames_per_second, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 1} },
     };
+
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
@@ -246,8 +262,18 @@ STATIC mp_obj_t displayio_display_obj_refresh(size_t n_args, const mp_obj_t *pos
     if (minimum_frames_per_second > 0) {
         maximum_ms_per_real_frame = 1000 / minimum_frames_per_second;
     }
-    return mp_obj_new_bool(common_hal_displayio_display_refresh(self, 1000 / args[ARG_target_frames_per_second].u_int, maximum_ms_per_real_frame));
+
+    uint32_t target_ms_per_frame;
+    if (args[ARG_target_frames_per_second].u_obj == mp_const_none) {
+        target_ms_per_frame = 0xffffffff;
+    }
+    else {
+        target_ms_per_frame = 1000 / mp_obj_get_int(args[ARG_target_frames_per_second].u_obj);
+    }
+
+    return mp_obj_new_bool(common_hal_displayio_display_refresh(self, target_ms_per_frame, maximum_ms_per_real_frame));
 }
+
 MP_DEFINE_CONST_FUN_OBJ_KW(displayio_display_refresh_obj, 1, displayio_display_obj_refresh);
 
 //|     auto_refresh: bool
@@ -344,7 +370,7 @@ const mp_obj_property_t displayio_display_auto_brightness_obj = {
 
 
 //|     width: int
-//|	    Gets the width of the board
+//|     """Gets the width of the board"""
 //|
 STATIC mp_obj_t displayio_display_obj_get_width(mp_obj_t self_in) {
     displayio_display_obj_t *self = native_display(self_in);
@@ -360,7 +386,7 @@ const mp_obj_property_t displayio_display_width_obj = {
 };
 
 //|     height: int
-//|	    """Gets the height of the board"""
+//|     """Gets the height of the board"""
 //|
 STATIC mp_obj_t displayio_display_obj_get_height(mp_obj_t self_in) {
     displayio_display_obj_t *self = native_display(self_in);
@@ -399,7 +425,7 @@ const mp_obj_property_t displayio_display_rotation_obj = {
 };
 
 //|     bus: _DisplayBus
-//|	    """The bus being used by the display"""
+//|     """The bus being used by the display"""
 //|
 //|
 STATIC mp_obj_t displayio_display_obj_get_bus(mp_obj_t self_in) {
@@ -420,7 +446,7 @@ const mp_obj_property_t displayio_display_bus_obj = {
 //|         """Extract the pixels from a single row
 //|
 //|         :param int y: The top edge of the area
-//|         :param bytearray buffer: The buffer in which to place the pixel data"""
+//|         :param ~_typing.WriteableBuffer buffer: The buffer in which to place the pixel data"""
 //|         ...
 //|
 STATIC mp_obj_t displayio_display_obj_fill_row(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {

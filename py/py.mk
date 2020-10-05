@@ -19,7 +19,7 @@ endif
 QSTR_GLOBAL_DEPENDENCIES += $(PY_SRC)/mpconfig.h mpconfigport.h
 
 # some code is performance bottleneck and compiled with other optimization options
-CSUPEROPT = -O3
+_CSUPEROPT = -O3
 
 # this sets the config file for FatFs
 CFLAGS_MOD += -DFFCONF_H=\"lib/oofatfs/ffconf.h\"
@@ -181,6 +181,7 @@ PY_CORE_O_BASENAME = $(addprefix py/,\
 	argcheck.o \
 	warning.o \
 	map.o \
+	enum.o \
 	obj.o \
 	objarray.o \
 	objattrtuple.o \
