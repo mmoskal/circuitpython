@@ -71,6 +71,7 @@ busio_jacdac_obj_t* jd_instance = NULL;
 
 static void tim_set_timer(busio_jacdac_obj_t* self, int delta, cb_t cb);
 static void initial_rx_timeout(busio_jacdac_obj_t* self);
+void tx_start(busio_jacdac_obj_t *self);
 
 static inline void cfg_dbg_pins(void){
     nrf_gpio_cfg_output(4); // P0
@@ -88,6 +89,33 @@ static inline void set_P1(int val) {
 
 static inline void set_P2(int val) {
     nrf_gpio_pin_write(3, val);
+}
+
+static uint32_t seed;
+
+static void seed_random(uint32_t s) {
+    seed = (seed * 0x1000193) ^ s;
+}
+
+static uint32_t get_random(void) {
+    if (seed == 0)
+        seed_random(13 + *((uint32_t*)0x20032e20));
+
+    // xorshift algorithm
+    uint32_t x = seed;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    seed = x;
+    return x;
+}
+
+// return v +/- 25% or so
+static uint32_t random_around(uint32_t v) {
+    uint32_t mask = 0xfffffff;
+    while (mask > v)
+        mask >>= 1;
+    return (v - (mask >> 1)) + (get_random() & mask);
 }
 
 /*************************************************************************************
@@ -215,7 +243,7 @@ jd_frame_t* buffer_from_pool(busio_jacdac_obj_t* self) {
     return ret;
 }
 
-void move_to_rx_queue(busio_jacdac_obj_t* self, jd_frame_t* f) {
+int move_to_rx_queue(busio_jacdac_obj_t* self, jd_frame_t* f) {
     int i;
 
     for (i = 0; i < JD_RX_SIZE; i++)
@@ -226,7 +254,25 @@ void move_to_rx_queue(busio_jacdac_obj_t* self, jd_frame_t* f) {
         }
 
     if (i == JD_RX_SIZE)
-        target_panic();
+        return -1;
+
+    return 0;
+}
+
+int move_to_tx_queue(busio_jacdac_obj_t* self, jd_frame_t* f) {
+    int i;
+
+    for (i = 0; i < JD_TX_SIZE; i++)
+        if (self->tx_queue[i] == NULL)
+        {
+            self->tx_queue[i] = f;
+            break;
+        }
+
+    if (i == JD_TX_SIZE)
+        return -1;
+
+    return 1;
 }
 
 void return_buffer_to_pool(busio_jacdac_obj_t* self, jd_frame_t* buf) {
@@ -453,21 +499,80 @@ static void rx_done(busio_jacdac_obj_t *self) {
     jd_frame_t* rx = self->rx_buffer;
     self->rx_buffer = buffer_from_pool(self);
 
-    move_to_rx_queue(self, rx);
+    int ret = move_to_rx_queue(self, rx);
+
+    // drop but ensure memory is not left floating around...
+    if (ret == -1)
+        return_buffer_to_pool(self, rx);
 
     stop_uart_dma(self);
     // restart normal operation
     enable_gpio_interrupts(self);
+
+    if (is_status(self, TX_PENDING))
+        tim_set_timer(self, random_around(150), tx_start);
 }
 
 
 /*************************************************************************************
 *   JACDAC - transmitting
 */
+void tx_start(busio_jacdac_obj_t *self) {
+    if ((self->status & TX_ACTIVE) || (self->status & RX_ACTIVE))
+        target_panic();
+
+    log_char('T');
+
+    if (self->tx_buffer == NULL)
+    {
+        __disable_irq();
+        for (int i = 0; i < JD_RX_SIZE; i++)
+            if (self->tx_queue[i])
+            {
+                self->tx_buffer = self->tx_queue[i];
+                self->tx_queue[i] = NULL;
+                break;
+            }
+        __enable_irq();
+
+        if (self->tx_buffer == NULL)
+        {
+            clr_status(self, TX_PENDING);
+            return;
+        }
+    }
+
+    // try to pull the line low, provided it currently reads as high
+    if (gpio_get(self) == 0) {
+        set_P0(0);
+        set_status(self, TX_PENDING);
+        return;
+    }
+
+    disable_gpio_interrupts(self);
+
+    set_P0(1);
+    log_char(';');
+    gpio_set(self, 0);
+    // start pulse (11-15µs)
+    common_hal_mcu_delay_us(10);
+    clr_status(self, TX_PENDING);
+    set_status(self, TX_ACTIVE);
+
+    // start-data gap (40-89µs)
+    gpio_set(self, 1);
+    uint16_t* data = (uint16_t*)self->tx_buffer;
+    *data = jd_crc16((uint8_t *)self->tx_buffer + 2, JD_FRAME_SIZE(self->tx_buffer) - 2);
+    common_hal_mcu_delay_us(19);
+
+    // setup UART tx
+    set_pin_tx(self);
+    nrfx_uarte_tx(self->uarte, (uint8_t*) self->tx_buffer, JD_FRAME_SIZE(self->tx_buffer));
+}
 
 static void tx_done(busio_jacdac_obj_t *self) {
     set_P0(0);
-    log_char('T');
+    log_char('t');
     disable_tx_interrupts(self);
 
      if (!is_status(self, TX_ACTIVE))
@@ -477,13 +582,31 @@ static void tx_done(busio_jacdac_obj_t *self) {
 
     // end pulse (11-15µs)
     gpio_set(self, 0);
-    common_hal_mcu_delay_us(11);
+    common_hal_mcu_delay_us(10);
+    return_buffer_to_pool(self, self->tx_buffer);
+    self->tx_buffer = NULL;
     gpio_set(self, 1);
 
     uart_configure_tx(self, 0);
 
     // restart idle operation
     clr_status(self, TX_ACTIVE);
+
+    __disable_irq();
+    bool more = false;
+    for (int i = 0; i < JD_RX_SIZE; i++)
+        if (self->tx_queue[i])
+        {
+            more = true;
+            break;
+        }
+    __enable_irq();
+
+    if (more)
+    {
+        set_status(self, TX_PENDING);
+        tim_set_timer(self, random_around(150), tx_start);
+    }
 
     enable_gpio_interrupts(self);
 }
@@ -583,7 +706,6 @@ static void initialize_gpio(busio_jacdac_obj_t *self) {
 }
 
 static void initialize_timer(busio_jacdac_obj_t *self) {
-    log_char('T');
     if (self->timer_refcount == 0) {
         self->timer = nrf_peripherals_allocate_timer();
         if (self->timer == NULL) {
@@ -661,8 +783,11 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_o
     for (int i = 0; i < JD_RX_SIZE; i++)
         self->rx_queue[i] = NULL;
 
+    for (int i = 0; i < JD_TX_SIZE; i++)
+        self->tx_queue[i] = NULL;
+
     self->rx_buffer = buffer_from_pool(self);
-    self->tx_buffer = m_malloc(sizeof(jd_frame_t), true);
+    self->tx_buffer = NULL;
 
     // allocate_peripheral(self);
 
@@ -708,33 +833,27 @@ bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *self) {
 }
 
 int common_hal_busio_jacdac_send(busio_jacdac_obj_t *self, const uint8_t *data, size_t len) {
-    if ((self->status & TX_ACTIVE) || (self->status & RX_ACTIVE))
-        return -1;
-    set_P0(1);
-    log_char('t');
+    jd_frame_t* f = buffer_from_pool(self);
 
-    // try to pull the line low, provided it currently reads as high
-    if (gpio_get(self) == 0) {
-        set_P0(0);
+    if (f == NULL)
+        return -1;
+
+    memcpy(f, data, MIN(len, JD_MAX_FRAME_SIZE));
+
+    int ret = move_to_tx_queue(self, f);
+
+    if (ret == -1)
+    {
+        return_buffer_to_pool(self, f);
         return -1;
     }
 
-    disable_gpio_interrupts(self);
-    gpio_set(self, 0);
-    // start pulse (11-15µs)
-    common_hal_mcu_delay_us(9);
-    set_status(self, TX_ACTIVE);
+    if (!is_status(self, TX_PENDING | TX_ACTIVE | RX_ACTIVE))
+    {
+        set_status(self, TX_PENDING);
+        tim_set_timer(self, 100, tx_start);
+    }
 
-    // start-data gap (40-89µs)
-    gpio_set(self, 1);
-    *(uint16_t*)data = jd_crc16((uint8_t *)data + 2, len - 2);
-    common_hal_mcu_delay_us(19);
-    log_char((char)len);
-    memcpy(self->tx_buffer, data, MIN(len, 254));
-
-    // setup UART tx
-    set_pin_tx(self);
-    nrfx_uarte_tx(self->uarte, (uint8_t*) self->tx_buffer, MIN(len, 254));
     return 1;
 }
 
