@@ -136,7 +136,7 @@ STATIC mp_obj_t busio_jacdac_send(size_t n_args, const mp_obj_t *pos_args, mp_ma
 
     // empty buffer
     if (length == 0) {
-        return mp_const_none;
+        return mp_obj_new_bool(0);
     }
 
     return mp_obj_new_bool(common_hal_busio_jacdac_send(self, ((uint8_t*)bufinfo.buf) + start, length));
@@ -168,7 +168,7 @@ STATIC mp_obj_t busio_jacdac_receive(size_t n_args, const mp_obj_t *pos_args, mp
 
     // empty buffer
     if (length == 0) {
-        return 0;
+        return mp_obj_new_bool(0);
     }
 
     return mp_obj_new_bool(common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length));
