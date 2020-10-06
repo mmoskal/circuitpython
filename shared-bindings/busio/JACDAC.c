@@ -136,11 +136,10 @@ STATIC mp_obj_t busio_jacdac_send(size_t n_args, const mp_obj_t *pos_args, mp_ma
 
     // empty buffer
     if (length == 0) {
-        return mp_const_none;
+        return mp_obj_new_bool(0);
     }
 
-    common_hal_busio_jacdac_send(self, ((uint8_t*)bufinfo.buf) + start, length);
-    return mp_const_none;
+    return mp_obj_new_bool(common_hal_busio_jacdac_send(self, ((uint8_t*)bufinfo.buf) + start, length));
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 2, busio_jacdac_send);
 
@@ -169,18 +168,72 @@ STATIC mp_obj_t busio_jacdac_receive(size_t n_args, const mp_obj_t *pos_args, mp
 
     // empty buffer
     if (length == 0) {
-        return mp_const_none;
+        return mp_obj_new_bool(0);
     }
 
-    common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length);
-    return mp_const_none;
+    return mp_obj_new_bool(common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length));
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_receive_obj, 2, busio_jacdac_receive);
 
+// https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+static uint32_t hash_fnv1(const void *data, unsigned len) {
+    const uint8_t *d = (const uint8_t *)data;
+    uint32_t h = 0x811c9dc5;
+    while (len--)
+        h = (h * 0x1000193) ^ *d++;
+    return h;
+}
+
+static uint32_t jd_hash(uint8_t* buf, size_t length, int bits) {
+    if (bits < 1)
+        return 0;
+
+    uint32_t h = hash_fnv1(buf, length);
+
+    if (bits >= 32)
+        return h;
+    else
+        return ((h ^ (h >> bits)) & ((1 << bits) - 1));
+}
 
 
+STATIC mp_obj_t busio_jacdac_hash(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
+    enum { ARG_buffer };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_buffer,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
+    };
 
+    busio_jacdac_obj_t *self = MP_OBJ_TO_PTR(pos_args[0]);
+    check_for_deinit(self);
 
+    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
+    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
+
+    // setup buffer
+    mp_buffer_info_t bufinfo;
+    mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_READ);
+    int32_t start = 0;
+    size_t length = bufinfo.len;
+    normalize_buffer_bounds(&start, INT_MAX, &length);
+
+    // empty buffer
+    if (length == 0) {
+        return 0;
+    }
+
+    uint32_t h = jd_hash(((uint8_t*)bufinfo.buf), length, 30);
+
+    vstr_t vstr;
+    vstr_init_len(&vstr, 4);
+
+    vstr.buf[0] = 0x41 + h % 26;
+    vstr.buf[1] = 0x41 + (h / 26) % 26;
+    vstr.buf[2] = 0x30 + (h / (26 * 26)) % 10;
+    vstr.buf[3] = 0x30 + (h / (26 * 26 * 10)) % 10;
+
+    return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
+}
+MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_hash_obj, 2, busio_jacdac_hash);
 
 
 STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
@@ -190,6 +243,7 @@ STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
 
     { MP_ROM_QSTR(MP_QSTR_send),     MP_ROM_PTR(&busio_jacdac_send_obj) },
     { MP_ROM_QSTR(MP_QSTR_receive),  MP_ROM_PTR(&busio_jacdac_receive_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hash),  MP_ROM_PTR(&busio_jacdac_hash_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(busio_jacdac_locals_dict, busio_jacdac_locals_dict_table);
 

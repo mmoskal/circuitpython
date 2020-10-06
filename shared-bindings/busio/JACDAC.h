@@ -40,7 +40,7 @@ extern void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const
 extern void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context);
 extern bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context);
 
-extern void common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint8_t *data, size_t len);
-extern void common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
+extern int common_hal_busio_jacdac_send(busio_jacdac_obj_t *context, const uint8_t *data, size_t len);
+extern int common_hal_busio_jacdac_receive(busio_jacdac_obj_t *context, uint8_t *data, size_t len);
 
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BUSIO_JACDAC_H

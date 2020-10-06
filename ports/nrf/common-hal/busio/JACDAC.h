@@ -33,12 +33,14 @@
 #include "nrfx_uarte.h"
 #include "nrf/timers.h"
 
-#define JD_RX_ARRAY_SIZE 10
-#define JD_TX_ARRAY_SIZE 10
+#define JD_POOL_SIZE 20
+#define JD_RX_SIZE 10
+#define JD_TX_SIZE 10
 
 
 // 255 minus size of the serial header, rounded down to 4
 #define JD_SERIAL_PAYLOAD_SIZE 236
+#define JD_MAX_FRAME_SIZE 252
 
 
 // structure for a jacdac frame
@@ -61,17 +63,12 @@ typedef struct busio_jacdac_obj {
 
     nrfx_uarte_t* uarte;
     nrfx_timer_t* timer;
-    uint8_t timer_refcount;
 
     void (*tim_cb)(struct busio_jacdac_obj*);
 
-    uint8_t txHead;
-    uint8_t txTail;
-    uint8_t rxHead;
-    uint8_t rxTail;
-
-    jd_frame_t* rxArray[JD_RX_ARRAY_SIZE];
-    jd_frame_t* txArray[JD_TX_ARRAY_SIZE];
+    jd_frame_t* buffer_pool[JD_POOL_SIZE];
+    jd_frame_t* rx_queue[JD_RX_SIZE];
+    jd_frame_t* tx_queue[JD_TX_SIZE];
 
     jd_frame_t* rx_buffer;
     jd_frame_t* tx_buffer;
