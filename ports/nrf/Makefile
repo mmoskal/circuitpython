@@ -91,7 +91,7 @@ ifeq ($(DEBUG), 1)
 else
   OPTIMIZATION_FLAGS ?= -O2
   CFLAGS += -DNDEBUG -ggdb3
-#   CFLAGS += -flto -flto-partition=none
+  CFLAGS += -flto -flto-partition=none
 endif
 
 # option to override compiler optimization level, set in boards/$(BOARD)/mpconfigboard.mk
