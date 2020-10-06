@@ -67,7 +67,8 @@ static inline void log_char(char c) {
 
 #define TX_PENDING 0x10
 
-busio_jacdac_obj_t* jd_instance = NULL;
+#define JD_INST_ARRAY_SIZE  4
+busio_jacdac_obj_t* jd_instances[JD_INST_ARRAY_SIZE] = { NULL };
 
 static void tim_set_timer(busio_jacdac_obj_t* self, int delta, cb_t cb);
 static void initial_rx_timeout(busio_jacdac_obj_t* self);
@@ -679,8 +680,18 @@ static void timer_irq(nrf_timer_event_t event_type, void* context) {
 
 // interrupt handler for GPIO
 static void gpiote_callback(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
-    if (jd_instance && pin == jd_instance->pin && !is_status(jd_instance, TX_ACTIVE))
-        rx_start(jd_instance);
+
+    busio_jacdac_obj_t* self = NULL;
+
+    for (int i = 0; i < JD_INST_ARRAY_SIZE; i++)
+        if (jd_instances[i]->pin == pin)
+        {
+            self = jd_instances[i];
+            break;
+        }
+
+    if (self && !is_status(self, TX_ACTIVE))
+        rx_start(self);
 }
 
 
@@ -706,30 +717,28 @@ static void initialize_gpio(busio_jacdac_obj_t *self) {
 }
 
 static void initialize_timer(busio_jacdac_obj_t *self) {
-    if (self->timer_refcount == 0) {
-        self->timer = nrf_peripherals_allocate_timer();
-        if (self->timer == NULL) {
-            target_panic();
-            mp_raise_RuntimeError(translate("All timers in use"));
-        }
+    self->timer = nrf_peripherals_allocate_timer();
 
-        nrfx_timer_config_t timer_config = {
-            .frequency = NRF_TIMER_FREQ_1MHz,
-            .mode = NRF_TIMER_MODE_TIMER,
-            .bit_width = NRF_TIMER_BIT_WIDTH_32,
-            .interrupt_priority = 2,
-            .p_context = self
-        };
-
-        nrfx_timer_init(self->timer, &timer_config, &timer_irq);
-        nrfx_timer_enable(self->timer);
+    if (self->timer == NULL) {
+        target_panic();
+        mp_raise_RuntimeError(translate("All timers in use"));
     }
-    self->timer_refcount++;
 
+    nrfx_timer_config_t timer_config = {
+        .frequency = NRF_TIMER_FREQ_1MHz,
+        .mode = NRF_TIMER_MODE_TIMER,
+        .bit_width = NRF_TIMER_BIT_WIDTH_32,
+        .interrupt_priority = 2,
+        .p_context = self
+    };
+
+    nrfx_timer_init(self->timer, &timer_config, &timer_irq);
+    nrfx_timer_enable(self->timer);
 }
 
 static void initialize_uart(busio_jacdac_obj_t *self) {
     self->uarte = NULL;
+
     for (size_t i = 0; i < MP_ARRAY_SIZE(nrfx_uartes); i++) {
         if ((nrfx_uartes[i].p_reg->ENABLE & UARTE_ENABLE_ENABLE_Msk) == 0) {
             self->uarte = &nrfx_uartes[i];
@@ -763,15 +772,29 @@ static void initialize_uart(busio_jacdac_obj_t *self) {
 */
 
 void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_obj_t* pin) {
-
-    // if (jd_instance) {
-    //     self = jd_instance;
-    //     return;
-    // }
-
     log_char('A');
 
-    jd_instance = self;
+    bool found = false;
+    for (int i = 0; i < JD_INST_ARRAY_SIZE; i++)
+        if (jd_instances[i] == self)
+        {
+            found = true;
+            break;
+        }
+
+    if (!found)
+    {
+        int i;
+        for (i = 0; i < JD_INST_ARRAY_SIZE; i++)
+            if (jd_instances[i] == NULL)
+            {
+                jd_instances[i] = self;
+                break;
+            }
+
+        if (i == JD_INST_ARRAY_SIZE)
+            target_panic();
+    }
 
     self->pin = pin->number;
     self->status = 0;
@@ -789,8 +812,6 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_o
     self->rx_buffer = buffer_from_pool(self);
     self->tx_buffer = NULL;
 
-    // allocate_peripheral(self);
-
     cfg_dbg_pins();
 
     claim_pin(pin);
@@ -803,28 +824,67 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t* self, const mcu_pin_o
 
 
 void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t* self) {
-
-    log_char('D');
-    // free_peripheral(self);
-
     if (common_hal_busio_jacdac_deinited(self))
         return;
 
     nrfx_gpiote_in_event_disable(self->pin);
     nrfx_gpiote_in_uninit(self->pin);
 
-    // timer
-    self->timer_refcount--;
-    if (self->timer_refcount == 0) {
-        nrf_peripherals_free_timer(self->timer);
-    }
+    nrf_peripherals_free_timer(self->timer);
 
     // uart
-    if (self->uarte != NULL)
+    if (self->uarte)
+    {
+        disable_tx_interrupts(self);
+        disable_rx_interrupts(self);
+
+        nrfx_uarte_tx_abort(self->uarte);
+        nrfx_uarte_rx_abort(self->uarte);
         nrfx_uarte_uninit(self->uarte);
+    }
 
     // pin
     reset_pin_number(self->pin);
+
+    for (int i = 0; i < JD_POOL_SIZE; i++)
+    {
+        if (self->buffer_pool[i])
+        {
+            m_free(self->buffer_pool[i]);
+            self->buffer_pool[i] = NULL;
+        }
+    }
+
+    for (int i = 0; i < JD_RX_SIZE; i++)
+    {
+        if (self->rx_queue[i])
+        {
+            m_free(self->rx_queue[i]);
+            self->rx_queue[i] = NULL;
+        }
+    }
+
+    for (int i = 0; i < JD_TX_SIZE; i++)
+    {
+        if (self->tx_queue[i])
+        {
+            m_free(self->tx_queue[i]);
+            self->tx_queue[i] = NULL;
+        }
+    }
+
+    if (self->rx_buffer)
+    {
+        m_free(self->rx_buffer);
+        self->rx_buffer = NULL;
+    }
+
+    if (self->tx_buffer)
+    {
+        m_free(self->tx_buffer);
+        self->tx_buffer = NULL;
+    }
+
     self->pin = NO_PIN;
 }
 
@@ -882,27 +942,11 @@ int common_hal_busio_jacdac_receive(busio_jacdac_obj_t *self, uint8_t *data, siz
 }
 
 void jacdac_reset(void) {
-    log_char('E');
-    // reset gpiote
-    // if ( nrfx_gpiote_is_init() ) {
-    //     nrfx_gpiote_uninit();
-    // }
-    // nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
+    log_char('}');
 
-
-    // // free all peripherals
-    // for (uint8_t i = 0; i < JD_PERIPHERALS; i++) {
-
-    //     // reset timers
-    //     if (peripherals[i]->timer != NULL)
-    //         nrf_peripherals_free_timer(peripherals[i]->timer);
-    //     peripherals[i]->timer_refcount = 0;
-
-
-    //     peripherals[i] = NULL;
-    // }
-
-    // // reset uart
-    // for (size_t i = 0 ; i < MP_ARRAY_SIZE(nrfx_uartes); i++)
-    //     nrfx_uarte_uninit(&nrfx_uartes[i]);
+    for (int i = 0; i < JD_INST_ARRAY_SIZE; i++)
+    {
+        common_hal_busio_jacdac_deinit(jd_instances[i]);
+        jd_instances[i] = NULL;
+    }
 }
