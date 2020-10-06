@@ -45,7 +45,7 @@
 
 #define JD_LOG_SIZE     512
 volatile uint32_t jd_log[JD_LOG_SIZE] = {0};
-static uint32_t logidx = 0;
+uint32_t logidx = 0;
 
 static inline void log_char(char c) {
     jd_log[logidx] = c;
@@ -319,6 +319,7 @@ static void uart_configure_tx(busio_jacdac_obj_t* self, int enable) {
         NRF_P0->PIN_CNF[self->pin] =  3 << 2; // this overrides DIR setting above
         self->uarte->p_reg->PSEL.TXD = self->pin;
         self->uarte->p_reg->EVENTS_ENDTX = 0;
+        self->uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDTX_Msk);
         self->uarte->p_reg->ENABLE = 8;
         while(!(self->uarte->p_reg->ENABLE));
         set_status(self, TX_CONFIGURED);
@@ -327,6 +328,7 @@ static void uart_configure_tx(busio_jacdac_obj_t* self, int enable) {
         while(self->uarte->p_reg->TASKS_STOPTX);
         self->uarte->p_reg->ENABLE = 0;
         while((self->uarte->p_reg->ENABLE));
+        self->uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDTX_Msk);
         self->uarte->p_reg->PSEL.TXD = 0xFFFFFFFF;
         clr_status(self, TX_CONFIGURED);
     }
@@ -340,6 +342,7 @@ static void uart_configure_rx(busio_jacdac_obj_t* self, int enable) {
         self->uarte->p_reg->EVENTS_ENDRX = 0;
         self->uarte->p_reg->EVENTS_ERROR = 0;
         self->uarte->p_reg->ERRORSRC = self->uarte->p_reg->ERRORSRC;
+        self->uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
         self->uarte->p_reg->ENABLE = 8;
         while(!(self->uarte->p_reg->ENABLE));
         set_status(self, RX_CONFIGURED);
@@ -348,25 +351,10 @@ static void uart_configure_rx(busio_jacdac_obj_t* self, int enable) {
         while(self->uarte->p_reg->TASKS_STOPRX);
         self->uarte->p_reg->ENABLE = 0;
         while((self->uarte->p_reg->ENABLE));
+        self->uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDRX_Msk | UARTE_INTENCLR_ERROR_Msk);
         self->uarte->p_reg->PSEL.RXD = 0xFFFFFFFF;
         clr_status(self, RX_CONFIGURED);
     }
-}
-
-static inline void enable_rx_interrupts(busio_jacdac_obj_t* self) {
-    self->uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
-}
-
-static inline void disable_rx_interrupts(busio_jacdac_obj_t* self) {
-    self->uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDRX_Msk | UARTE_INTENSET_ERROR_Msk);
-}
-
-static inline void enable_tx_interrupts(busio_jacdac_obj_t* self) {
-    self->uarte->p_reg->INTENSET = (UARTE_INTENSET_ENDTX_Msk);
-}
-
-static inline void disable_tx_interrupts(busio_jacdac_obj_t* self) {
-    self->uarte->p_reg->INTENCLR = (UARTE_INTENCLR_ENDTX_Msk);
 }
 
 
@@ -382,7 +370,6 @@ static inline void set_pin_tx(busio_jacdac_obj_t* self) {
 
     uart_configure_rx(self, 0);
     uart_configure_tx(self, 1);
-    enable_tx_interrupts(self);
 }
 
 // set the JACDAC pin to act as the UART rx pin
@@ -392,7 +379,6 @@ static inline void set_pin_rx(busio_jacdac_obj_t* self) {
 
     uart_configure_tx(self, 0);
     uart_configure_rx(self, 1);
-    enable_rx_interrupts(self);
 }
 
 // set the JACDAC pin to act as a gpio pin
@@ -406,9 +392,6 @@ static inline void set_pin_gpio(busio_jacdac_obj_t* self) {
 *   Receiving
 */
 static void stop_uart_dma(busio_jacdac_obj_t* self) {
-    disable_tx_interrupts(self);
-    disable_rx_interrupts(self);
-
     nrfx_uarte_tx_abort(self->uarte);
     nrfx_uarte_rx_abort(self->uarte);
 }
@@ -416,10 +399,9 @@ static void stop_uart_dma(busio_jacdac_obj_t* self) {
 static void rx_timeout(busio_jacdac_obj_t* self) {
     log_char('?');
     set_P1(0);
-    disable_rx_interrupts(self);
 
-    if (!is_status(self, RX_ACTIVE))
-        target_panic();
+    // if (!is_status(self, RX_ACTIVE))
+    //     target_panic();
 
     // disable uart
     stop_uart_dma(self);
@@ -462,8 +444,6 @@ static void rx_done(busio_jacdac_obj_t *self) {
     set_P1(0);
 
     log_char('R');
-
-    disable_rx_interrupts(self);
     // clear any upcoming timer interrupts
     nrfx_timer_capture(self->timer, NRF_TIMER_CC_CHANNEL0);
 
@@ -574,7 +554,6 @@ void tx_start(busio_jacdac_obj_t *self) {
 static void tx_done(busio_jacdac_obj_t *self) {
     set_P0(0);
     log_char('t');
-    disable_tx_interrupts(self);
 
      if (!is_status(self, TX_ACTIVE))
         target_panic();
@@ -629,7 +608,7 @@ static void uart_irq(const nrfx_uarte_event_t* event, void* context) {
 
     switch ( event->type ) {
         case NRFX_UARTE_EVT_RX_DONE:
-            // rx_done(self);
+            rx_done(self);
             break;
 
         case NRFX_UARTE_EVT_TX_DONE:
@@ -640,8 +619,16 @@ static void uart_irq(const nrfx_uarte_event_t* event, void* context) {
             log_char('E');
             log_char((char)event->data.error.error_mask);
             // Possible Error source is Overrun, Parity, Framing, Break
-            if ((event->data.error.error_mask & NRF_UARTE_ERROR_BREAK_MASK) && is_status(self, RX_ACTIVE))
-                rx_done(self);
+            if (is_status(self, RX_ACTIVE))
+            {
+                log_char('&');
+                if ((event->data.error.error_mask & NRF_UARTE_ERROR_BREAK_MASK))
+                    rx_done(self);
+            }
+            else if (is_status(self, TX_ACTIVE))
+            {
+                log_char('*');
+            }
 
             break;
      }
@@ -835,9 +822,6 @@ void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t* self) {
     // uart
     if (self->uarte)
     {
-        disable_tx_interrupts(self);
-        disable_rx_interrupts(self);
-
         nrfx_uarte_tx_abort(self->uarte);
         nrfx_uarte_rx_abort(self->uarte);
         nrfx_uarte_uninit(self->uarte);
@@ -946,7 +930,10 @@ void jacdac_reset(void) {
 
     for (int i = 0; i < JD_INST_ARRAY_SIZE; i++)
     {
-        common_hal_busio_jacdac_deinit(jd_instances[i]);
-        jd_instances[i] = NULL;
+        if (jd_instances[i])
+        {
+            common_hal_busio_jacdac_deinit(jd_instances[i]);
+            jd_instances[i] = NULL;
+        }
     }
 }
