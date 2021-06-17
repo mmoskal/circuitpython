@@ -344,8 +344,8 @@ msgstr ""
 msgid "All SPI peripherals are in use"
 msgstr ""
 
-#: ports/esp32s2/common-hal/busio/UART.c ports/nrf/common-hal/busio/UART.c
-#: ports/raspberrypi/common-hal/busio/UART.c
+#: ports/esp32s2/common-hal/busio/UART.c ports/nrf/common-hal/busio/JACDAC.c
+#: ports/nrf/common-hal/busio/UART.c ports/raspberrypi/common-hal/busio/UART.c
 msgid "All UART peripherals are in use"
 msgstr ""
 
@@ -380,7 +380,8 @@ msgstr ""
 #: ports/esp32s2/common-hal/pulseio/PulseIn.c
 #: ports/esp32s2/common-hal/pulseio/PulseOut.c
 #: ports/nrf/common-hal/audiopwmio/PWMAudioOut.c
-#: ports/nrf/common-hal/pulseio/PulseIn.c ports/nrf/peripherals/nrf/timers.c
+#: ports/nrf/common-hal/busio/JACDAC.c ports/nrf/common-hal/pulseio/PulseIn.c
+#: ports/nrf/peripherals/nrf/timers.c
 #: ports/raspberrypi/common-hal/audiopwmio/PWMAudioOut.c
 #: ports/stm/peripherals/timers.c shared-bindings/pwmio/PWMOut.c
 msgid "All timers in use"
@@ -3773,6 +3774,10 @@ msgstr ""
 
 #: py/emitinlinethumb.c
 msgid "parameters must be registers in sequence r0 to r3"
+msgstr ""
+
+#: shared-bindings/busio/JACDAC.c
+msgid "pin can not be None"
 msgstr ""
 
 #: shared-bindings/bitmaptools/__init__.c shared-bindings/displayio/Bitmap.c
