@@ -61,20 +61,20 @@ typedef struct busio_jacdac_obj {
     uint8_t pin;
     uint16_t status;
 
-    nrfx_uarte_t* uarte;
-    nrfx_timer_t* timer;
+    nrfx_uarte_t *uarte;
+    nrfx_timer_t *timer;
 
-    void (*tim_cb)(struct busio_jacdac_obj*);
+    void (*tim_cb)(struct busio_jacdac_obj *);
 
-    jd_frame_t* buffer_pool[JD_POOL_SIZE];
-    jd_frame_t* rx_queue[JD_RX_SIZE];
-    jd_frame_t* tx_queue[JD_TX_SIZE];
+    jd_frame_t *buffer_pool[JD_POOL_SIZE];
+    jd_frame_t *rx_queue[JD_RX_SIZE];
+    jd_frame_t *tx_queue[JD_TX_SIZE];
 
-    jd_frame_t* rx_buffer;
-    jd_frame_t* tx_buffer;
+    jd_frame_t *rx_buffer;
+    jd_frame_t *tx_buffer;
 } busio_jacdac_obj_t;
 
-typedef void (*cb_t)(busio_jacdac_obj_t*);
+typedef void (*cb_t)(busio_jacdac_obj_t *);
 
 /*
 typedef struct {

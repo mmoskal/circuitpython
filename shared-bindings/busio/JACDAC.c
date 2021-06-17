@@ -65,9 +65,9 @@ STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, 
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
 
-    const mcu_pin_obj_t* pin = validate_obj_is_free_pin_or_none(args[ARG_pin].u_obj);
+    const mcu_pin_obj_t *pin = validate_obj_is_free_pin_or_none(args[ARG_pin].u_obj);
 
-    if ( (pin == NULL)) {
+    if ((pin == NULL)) {
         mp_raise_ValueError(translate("pin can not be None"));
     }
 
@@ -139,7 +139,7 @@ STATIC mp_obj_t busio_jacdac_send(size_t n_args, const mp_obj_t *pos_args, mp_ma
         return mp_obj_new_bool(0);
     }
 
-    return mp_obj_new_bool(common_hal_busio_jacdac_send(self, ((uint8_t*)bufinfo.buf) + start, length));
+    return mp_obj_new_bool(common_hal_busio_jacdac_send(self, ((uint8_t *)bufinfo.buf) + start, length));
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_send_obj, 2, busio_jacdac_send);
 
@@ -171,7 +171,7 @@ STATIC mp_obj_t busio_jacdac_receive(size_t n_args, const mp_obj_t *pos_args, mp
         return mp_obj_new_bool(0);
     }
 
-    return mp_obj_new_bool(common_hal_busio_jacdac_receive(self, ((uint8_t*)bufinfo.buf) + start, length));
+    return mp_obj_new_bool(common_hal_busio_jacdac_receive(self, ((uint8_t *)bufinfo.buf) + start, length));
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_receive_obj, 2, busio_jacdac_receive);
 
@@ -179,21 +179,24 @@ MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_receive_obj, 2, busio_jacdac_receive);
 static uint32_t hash_fnv1(const void *data, unsigned len) {
     const uint8_t *d = (const uint8_t *)data;
     uint32_t h = 0x811c9dc5;
-    while (len--)
+    while (len--) {
         h = (h * 0x1000193) ^ *d++;
+    }
     return h;
 }
 
-static uint32_t jd_hash(uint8_t* buf, size_t length, int bits) {
-    if (bits < 1)
+static uint32_t jd_hash(uint8_t *buf, size_t length, int bits) {
+    if (bits < 1) {
         return 0;
+    }
 
     uint32_t h = hash_fnv1(buf, length);
 
-    if (bits >= 32)
+    if (bits >= 32) {
         return h;
-    else
-        return ((h ^ (h >> bits)) & ((1 << bits) - 1));
+    } else {
+        return (h ^ (h >> bits)) & ((1 << bits) - 1);
+    }
 }
 
 
@@ -221,7 +224,7 @@ STATIC mp_obj_t busio_jacdac_hash(size_t n_args, const mp_obj_t *pos_args, mp_ma
         return 0;
     }
 
-    uint32_t h = jd_hash(((uint8_t*)bufinfo.buf), length, 30);
+    uint32_t h = jd_hash(((uint8_t *)bufinfo.buf), length, 30);
 
     vstr_t vstr;
     vstr_init_len(&vstr, 4);
@@ -251,5 +254,5 @@ const mp_obj_type_t busio_jacdac_type = {
     { &mp_type_type },
     .name = MP_QSTR_JACDAC,
     .make_new = busio_jacdac_make_new,
-    .locals_dict = (mp_obj_dict_t*)&busio_jacdac_locals_dict,
+    .locals_dict = (mp_obj_dict_t *)&busio_jacdac_locals_dict,
 };
