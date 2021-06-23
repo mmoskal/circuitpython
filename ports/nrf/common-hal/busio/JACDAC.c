@@ -44,7 +44,7 @@
 #include <stdlib.h>
 
 #define JD_LOG_SIZE     512
-volatile uint32_t jd_log[JD_LOG_SIZE] = {0};
+volatile uint32_t jd_log[JD_LOG_SIZE] = {0}; // TODO uint32_t ?!
 uint32_t logidx = 0;
 
 static inline void log_char(char c) {
@@ -67,7 +67,7 @@ static inline void log_char(char c) {
 
 #define TX_PENDING 0x10
 
-#define JD_INST_ARRAY_SIZE  4
+#define JD_INST_ARRAY_SIZE  4 // TODO 2?
 busio_jacdac_obj_t *jd_instances[JD_INST_ARRAY_SIZE] = { NULL };
 
 static void tim_set_timer(busio_jacdac_obj_t *self, int delta, cb_t cb);
@@ -113,7 +113,7 @@ static uint32_t get_random(void) {
 }
 
 // return v +/- 25% or so
-static uint32_t random_around(uint32_t v) {
+static uint32_t random_around(uint32_t v) { // TODO move to common
     uint32_t mask = 0xfffffff;
     while (mask > v) {
         mask >>= 1;
@@ -444,7 +444,7 @@ static void rx_start(busio_jacdac_obj_t *self) {
 
     // TODO set timer for ticks.
     gpio_get(self);
-    tim_set_timer(self, 1000, rx_timeout);
+    tim_set_timer(self, 1000, rx_timeout); // TODO this won't work
     while (nrf_gpio_pin_read(self->pin) == 0) {
         ;
     }
@@ -452,6 +452,7 @@ static void rx_start(busio_jacdac_obj_t *self) {
     set_pin_rx(self);
 
     // if we don't receive these bytes (CRC) after 200 us assume an error
+    // TODO this was supposed to erase first 4 words not bytes
     uint8_t *b = (uint8_t *)self->rx_buffer;
     b[0] = 0;
     b[1] = 0;
