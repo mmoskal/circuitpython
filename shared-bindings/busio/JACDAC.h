@@ -64,20 +64,25 @@ typedef struct busio_jacdac_obj busio_jacdac_obj_t; // defined in common-hal
 typedef struct {
     mp_obj_base_t base;
     background_callback_t callback;
-    jd_frame_t *rxBuffer;
+    jd_frame_t *rxFrame;
     ringbuf_t rxTmpQueue;
     jd_linked_frame_t *txQueue;
     jd_linked_frame_t *rxQueue;
     jd_linked_frame_t *frameToSplit;
+
+    volatile uint8_t status;
 } busio_jacdac_base_obj_t;
 
 extern const mp_obj_type_t busio_jacdac_type;
 
-typedef void (*busio_jacdac_base_callback_t)(busio_jacdac_base_obj_t *);
+typedef void (*busio_jacdac_base_callback_t)(busio_jacdac_obj_t *);
 
 // to be called from common-hal only:
 extern void busio_jacdac_init(busio_jacdac_base_obj_t *self);
 extern void busio_jacdac_deinit(busio_jacdac_base_obj_t *self);
+extern void busio_jacdac_rx_completed(busio_jacdac_obj_t *ctx);
+extern void busio_jacdac_line_falling(busio_jacdac_obj_t *ctx);
+extern void busio_jacdac_tx_completed(busio_jacdac_obj_t *ctx);
 
 // standard MP stuff
 extern void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pin_obj_t *pin);

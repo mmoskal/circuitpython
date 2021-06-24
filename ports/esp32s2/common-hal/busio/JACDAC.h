@@ -39,5 +39,6 @@ struct busio_jacdac_obj {
 
 void jacdac_reset(void);
 
+#define JD_WR_OVERHEAD 20
 
 #endif // MICROPY_INCLUDED_ESP32S2_COMMON_HAL_BUSIO_JACDAC_H
