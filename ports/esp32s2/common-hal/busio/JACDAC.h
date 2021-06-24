@@ -31,10 +31,13 @@
 #include "py/obj.h"
 #include "shared-bindings/busio/JACDAC.h"
 
+#include "components/esp_timer/include/esp_timer.h"
 
 struct busio_jacdac_obj {
     busio_jacdac_base_obj_t base;
     uint8_t pin;
+    esp_timer_handle_t timer;
+    busio_jacdac_base_callback_t timer_cb;
 };
 
 void jacdac_reset(void);

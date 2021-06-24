@@ -44,11 +44,10 @@
 
 #include "common-hal/busio/JACDAC.h"
 
-#define JD_TX_QUEUE_SIZE 1024
-#define JD_RX_QUEUE_SIZE 1024
-#define JD_RX_TMP_QUEUE_SIZE 512
+#define JD_TX_QUEUE_MAX_SIZE 1024
+#define JD_RX_QUEUE_MAX_SIZE 1024
+#define JD_RX_TMP_QUEUE_SIZE 511
 
-static uint32_t seed;
 static void set_tick_timer(busio_jacdac_obj_t *ctx, uint8_t statusClear);
 
 //| class JACDAC:
@@ -60,11 +59,9 @@ static void set_tick_timer(busio_jacdac_obj_t *ctx, uint8_t statusClear);
 //|         ...
 //|
 STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    // Always initially allocate the UART (so also JACDAC) object within the long-lived heap.
-    // This is needed to avoid crashes with certain UART implementations which
-    // cannot accommodate being moved after creation. (See
-    // https://github.com/adafruit/circuitpython/issues/1056)
-    busio_jacdac_obj_t *self = m_new_ll_obj(busio_jacdac_obj_t);
+    // There might be non-movable objects referencing hardware in busio_jacdac_obj_t.
+    // Also, this will likely live forever.
+    busio_jacdac_obj_t *self = m_new0_ll(busio_jacdac_obj_t, 1);
     self->base.base.type = &busio_jacdac_type;
 
     enum { ARG_pin };
@@ -79,9 +76,37 @@ STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, 
 
     common_hal_busio_jacdac_construct(self, pin);
 
-    seed = shared_modules_random_getrandbits(32);
-
     return (mp_obj_t)self;
+}
+
+void busio_jacdac_init(busio_jacdac_base_obj_t *self) {
+    // Use long-lived allocations - will likely live forever, and rxBuffer at the very least cannot be moved due to DMA
+    ringbuf_alloc(&self->rxTmpQueue, JD_RX_TMP_QUEUE_SIZE, true);
+    self->rxFrame = m_new_ll_obj(jd_frame_t);
+}
+
+static void free_list(jd_linked_frame_t *l) {
+    while (l) {
+        jd_linked_frame_t *tmp = l;
+        l = l->next;
+        m_free(tmp);
+    }
+}
+
+void busio_jacdac_deinit(busio_jacdac_base_obj_t *self) {
+    jd_linked_frame_t *rx, *tx;
+    common_hal_mcu_disable_interrupts();
+    rx = self->rxQueue;
+    self->rxQueue = NULL;
+    tx = self->txQueue;
+    self->txQueue = NULL;
+    common_hal_mcu_enable_interrupts();
+    free_list(rx);
+    free_list(tx);
+    self->frameToSplit = NULL;
+    ringbuf_free(&self->rxTmpQueue);
+    m_free(self->rxFrame);
+    self->rxFrame = NULL;
 }
 
 //|     def deinit(self) -> None:
@@ -133,10 +158,13 @@ static uint16_t jd_crc16(const void *data, uint32_t size) {
     return crc;
 }
 
-#define PACKET_OVERHEAD (JD_LINKED_FRAME_HEADER_SIZE + 12 + 4)
+// used to estimate memory used by the queue
+#define PACKET_OVERHEAD (JD_LINKED_FRAME_HEADER_SIZE + 12 + 8)
 
 static int copy_and_append(jd_linked_frame_t *volatile *q, const uint8_t *data, int max_bytes) {
     size_t frm_sz = data[2] + 12;
+    // use short-lived allocation - given this is a native buffer, hopefully it's impossible
+    // for anyone to make it long-lived later
     jd_linked_frame_t *buf = m_malloc(frm_sz + JD_LINKED_FRAME_HEADER_SIZE, false);
 
     buf->timestamp_ms = common_hal_time_monotonic_ms();
@@ -194,7 +222,7 @@ STATIC mp_obj_t busio_jacdac_send(mp_obj_t self_, mp_obj_t buffer) {
     p[0] = crc & 0xff;
     p[1] = crc >> 8;
 
-    if (copy_and_append(&self->txQueue, bufinfo.buf, JD_TX_QUEUE_SIZE) != 0) {
+    if (copy_and_append(&self->txQueue, bufinfo.buf, JD_TX_QUEUE_MAX_SIZE) != 0) {
         mp_raise_ValueError(translate("Jacdac TX queue full"));
     }
 
@@ -383,6 +411,10 @@ const mp_obj_type_t busio_jacdac_type = {
 // implement own rng - only uses MP's one to init so as not to run rng at "random" points the program
 // (eg when Jacdac packets arrive) and mess with user's expectation of random seed
 static uint32_t jd_random(void) {
+    static uint32_t seed;
+    if (!seed) {
+        seed = shared_modules_random_getrandbits(32);
+    }
     // xorshift algorithm
     uint32_t x = seed;
     x ^= x << 13;
@@ -431,9 +463,13 @@ void busio_jacdac_tx_completed(busio_jacdac_obj_t *ctx) {
     jd_linked_frame_t *f;
     common_hal_mcu_disable_interrupts();
     f = ctx->base.txQueue;
-    ctx->base.txQueue = f->next;
+    if (f) {
+        ctx->base.txQueue = f->next;
+    }
     common_hal_mcu_enable_interrupts();
-    m_free(f);
+    if (f) {
+        m_free(f);
+    }
     tx_done(ctx);
 }
 

@@ -90,7 +90,7 @@ extern void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context);
 extern bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context);
 
 // these follow jacdac-c
-extern int common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us, busio_jacdac_base_callback_t callback);
+extern void common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us, busio_jacdac_base_callback_t callback);
 extern int common_hal_busio_jacdac_start_tx(busio_jacdac_obj_t *context, const void *data, uint32_t numbytes);
 extern void common_hal_busio_jacdac_start_rx(busio_jacdac_obj_t *context, void *data, uint32_t maxbytes);
 extern void common_hal_busio_jacdac_cancel(busio_jacdac_obj_t *context);
