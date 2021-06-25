@@ -353,6 +353,10 @@ msgstr ""
 msgid "All channels in use"
 msgstr ""
 
+#: ports/esp32s2/common-hal/busio/JACDAC.c
+msgid "All context->uart_hw peripherals are in use"
+msgstr ""
+
 #: ports/atmel-samd/common-hal/audioio/AudioOut.c
 msgid "All event channels in use"
 msgstr ""
@@ -1249,7 +1253,8 @@ msgstr ""
 msgid "Invalid Pin"
 msgstr ""
 
-#: ports/esp32s2/bindings/espidf/__init__.c ports/esp32s2/esp_error.c
+#: ports/esp32s2/bindings/espidf/__init__.c
+#: ports/esp32s2/common-hal/busio/JACDAC.c ports/esp32s2/esp_error.c
 #: py/moduerrno.c shared-bindings/busio/JACDAC.c
 #: shared-module/rgbmatrix/RGBMatrix.c
 msgid "Invalid argument"

@@ -32,15 +32,27 @@
 #include "shared-bindings/busio/JACDAC.h"
 
 #include "components/esp_timer/include/esp_timer.h"
+#include "hal/uart_ll.h"
 
 struct busio_jacdac_obj {
     busio_jacdac_base_obj_t base;
-    uint8_t pin;
+    const mcu_pin_obj_t *pinobj;
+    uint8_t pinnum;
+    bool seen_low;
+    bool rx_ended;
+    uint16_t tx_len;
+    uint16_t rx_len;
+    uint16_t data_left;
+    uint8_t *fifo_buf;
     esp_timer_handle_t timer;
     busio_jacdac_base_callback_t timer_cb;
+    uart_port_t uart_num;
+    uart_dev_t *uart_hw;
 };
 
-void jacdac_reset(void);
+extern void jacdac_reset(void);
+extern bool common_hal_busio_jacdac_is_free(uart_port_t port);
+
 
 #define JD_WR_OVERHEAD 20
 
