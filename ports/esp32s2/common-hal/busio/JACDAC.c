@@ -82,7 +82,7 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
         }
     }
     if (context->uart_num == UART_NUM_MAX) {
-        mp_raise_ValueError(translate("All context->uart_hw peripherals are in use"));
+        mp_raise_ValueError(translate("All UART peripherals are in use"));
     }
 
     context->uart_hw = UART_LL_GET_HW(context->uart_num);
@@ -136,7 +136,7 @@ void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context) {
 }
 
 bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context) {
-    return context->base.rxFrame != NULL;
+    return context->base.rxFrame == NULL;
 }
 
 void common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us, busio_jacdac_base_callback_t callback) {
@@ -340,7 +340,7 @@ IRAM_ATTR int common_hal_busio_jacdac_start_tx(busio_jacdac_obj_t *context, cons
     target_wait_us(12); // low pulse is 14us with wait of 12 here
     xgpio_set_level(context->pinnum, 1);
 
-    target_wait_us(36); // 41us from end of low pulse to start bit with wait of 36 here
+    target_wait_us(40); // ~55us from end of low pulse to start bit
 
     pin_tx(context);
 

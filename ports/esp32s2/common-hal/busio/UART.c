@@ -54,7 +54,7 @@ void uart_reset(void) {
 
 static uint8_t used_uarts;
 bool uart_is_used(uart_port_t num) {
-    return uart_is_driver_installed(num) || (used_uarts & (1 << (int)num)) == 0;
+    return uart_is_driver_installed(num) || (used_uarts & (1 << (int)num)) != 0;
 }
 
 void uart_mark_used(uart_port_t num, bool used) {

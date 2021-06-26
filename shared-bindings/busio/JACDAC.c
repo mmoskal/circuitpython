@@ -205,7 +205,7 @@ static int copy_and_append(jd_linked_frame_t *volatile *q, const uint8_t *data, 
 //|         ...
 //|
 STATIC mp_obj_t busio_jacdac_send(mp_obj_t self_, mp_obj_t buffer) {
-    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(self);
+    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(self_);
     check_for_deinit(self);
 
     // setup buffer
@@ -287,7 +287,7 @@ static int jd_shift_frame(jd_frame_t *frame) {
 //|         ...
 //|
 STATIC mp_obj_t busio_jacdac_receive(mp_obj_t self_) {
-    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(self);
+    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(self_);
     check_for_deinit(self);
     mp_obj_t res = mp_const_none;
     jd_linked_frame_t *lnk = self->frameToSplit;
