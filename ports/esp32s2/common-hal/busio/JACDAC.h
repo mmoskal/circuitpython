@@ -33,21 +33,29 @@
 
 #include "components/esp_timer/include/esp_timer.h"
 #include "hal/uart_ll.h"
+#include "driver/uart.h"
+
+typedef struct busio_jacdac_hw_alloc {
+    esp_timer_handle_t timer;
+    intr_handle_t intr_handle;
+    uint8_t uart_num;
+    uint8_t pin_num;
+} busio_jacdac_hw_alloc_t;
 
 struct busio_jacdac_obj {
     busio_jacdac_base_obj_t base;
     const mcu_pin_obj_t *pinobj;
-    uint8_t pinnum;
+    uint8_t pin_num;
+    uint8_t uart_num;
     bool seen_low;
     bool rx_ended;
     uint16_t tx_len;
     uint16_t rx_len;
     uint16_t data_left;
     uint8_t *fifo_buf;
-    esp_timer_handle_t timer;
     busio_jacdac_base_callback_t timer_cb;
-    uart_port_t uart_num;
     uart_dev_t *uart_hw;
+    busio_jacdac_hw_alloc_t *hw_alloc;
 };
 
 extern void jacdac_reset(void);

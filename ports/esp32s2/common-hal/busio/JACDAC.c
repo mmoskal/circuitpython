@@ -26,6 +26,7 @@
 
 #include "shared-bindings/microcontroller/__init__.h"
 #include "shared-bindings/busio/JACDAC.h"
+#include "shared-bindings/microcontroller/Pin.h"
 
 #include "lib/utils/interrupt_char.h"
 #include "py/mpconfig.h"
@@ -39,8 +40,10 @@
 
 #include "driver/uart.h"
 #include "driver/gpio.h"
+#include "components/driver/include/driver/periph_ctrl.h"
 
-#define LOG(...) ((void)0)
+#define LOG NOLOG
+// #define LOG DMESG
 
 #define UART_EMPTY_THRESH_DEFAULT (10)
 #define UART_FULL_THRESH_DEFAULT (120)
@@ -48,7 +51,12 @@
 
 #define FIFO_BYTE context->uart_hw->ahb_fifo.rw_byte
 
+#define NUM_HW_ALLOC 2
+
+static busio_jacdac_hw_alloc_t jd_hw_alloc[NUM_HW_ALLOC];
+
 static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context);
+
 static void log_pin_pulse(int pinid, int numpulses) {
 }
 
@@ -85,7 +93,23 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
         mp_raise_ValueError(translate("All UART peripherals are in use"));
     }
 
+    DMESG("Jacdac on UART%d IO%d", context->uart_num, context->pin_num);
+
     context->uart_hw = UART_LL_GET_HW(context->uart_num);
+
+    context->hw_alloc = NULL;
+
+    for (int i = 0; i < NUM_HW_ALLOC; ++i) {
+        if (!jd_hw_alloc[i].timer) {
+            context->hw_alloc = &jd_hw_alloc[i];
+            break;
+        }
+    }
+
+    if (!context->hw_alloc) {
+        // this is very unlikely - we would first run out of UARTs
+        mp_raise_ValueError(translate("Invalid argument"));
+    }
 
     busio_jacdac_init(&context->base);
 
@@ -94,13 +118,18 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
     args.arg = context;
     args.dispatch_method = ESP_TIMER_TASK;
     args.name = "JD timeout";
-    esp_timer_create(&args, &context->timer);
+    esp_timer_create(&args, &context->hw_alloc->timer);
 
     claim_pin(pin);
     context->pinobj = pin;
-    context->pinnum = pin->number;
+    context->pin_num = pin->number;
+
+    context->hw_alloc->pin_num = pin->number;
+    context->hw_alloc->uart_num = context->uart_num;
 
     uart_mark_used(context->uart_num, true);
+
+    periph_module_enable(uart_periph_signal[context->uart_num].module);
 
     const uart_config_t uart_config =
     {.baud_rate = 1000000,
@@ -109,7 +138,7 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
      .stop_bits = UART_STOP_BITS_1,
      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
     CHK(uart_param_config(context->uart_num, &uart_config));
-    CHK(uart_isr_register(context->uart_num, (void (*)(void *))uart_isr, context, 0, NULL));
+    CHK(uart_isr_register(context->uart_num, (void (*)(void *))uart_isr, context, 0, &context->hw_alloc->intr_handle));
 
     uart_intr_config_t uart_intr =
     {.intr_enable_mask = 0,
@@ -118,31 +147,71 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
      .txfifo_empty_intr_thresh = UART_EMPTY_THRESH_DEFAULT};
     CHK(uart_intr_config(context->uart_num, &uart_intr));
 
-    gpio_set_pull_mode(context->pinnum, GPIO_PULLUP_ONLY);
-    gpio_set_direction(context->pinnum, GPIO_MODE_INPUT);
+    gpio_config_t cfg = {
+        .pin_bit_mask = BIT64(context->pin_num),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = true,
+        .pull_down_en = false,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+
+    // gpio_set_pull_mode(context->pin_num, GPIO_PULLUP_ONLY);
+    // gpio_set_direction(context->pin_num, GPIO_MODE_INPUT);
 
     common_hal_busio_jacdac_cancel(context);
 }
 
-void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context) {
-    busio_jacdac_deinit(&context->base);
-    if (context->timer) {
-        esp_timer_stop(context->timer);
-        esp_timer_delete(context->timer);
-        context->timer = NULL;
+static void jd_deinit_hw_alloc(busio_jacdac_hw_alloc_t *hw_alloc) {
+    if (!hw_alloc->timer) {
+        return;
     }
-    uart_mark_used(context->uart_num, false);
-    // TODO
+
+    uart_dev_t *uart_hw = UART_LL_GET_HW(hw_alloc->uart_num);
+
+    esp_timer_stop(hw_alloc->timer);
+    esp_timer_delete(hw_alloc->timer);
+    hw_alloc->timer = NULL;
+    uart_mark_used(hw_alloc->uart_num, false);
+
+    uart_hw->int_clr.val = 0xffffffff;
+    uart_hw->int_ena.val = 0;
+
+    esp_intr_free(hw_alloc->intr_handle);
+    hw_alloc->intr_handle = NULL;
+
+    periph_module_disable(uart_periph_signal[hw_alloc->uart_num].module);
+    common_hal_mcu_pin_reset_number(hw_alloc->pin_num);
+}
+
+void jacdac_reset() {
+    for (int i = 0; i < NUM_HW_ALLOC; ++i) {
+        jd_deinit_hw_alloc(&jd_hw_alloc[i]);
+    }
+}
+
+void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context) {
+    if (common_hal_busio_jacdac_deinited(context)) {
+        return;
+    }
+
+    jd_deinit_hw_alloc(context->hw_alloc);
+    context->hw_alloc = NULL;
+    context->pinobj = NULL;
+
+    busio_jacdac_deinit(&context->base);
 }
 
 bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context) {
-    return context->base.rxFrame == NULL;
+    return context->hw_alloc == NULL;
 }
 
 void common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us, busio_jacdac_base_callback_t callback) {
     common_hal_mcu_disable_interrupts();
-    context->timer_cb = callback;
-    esp_timer_start_once(context->timer, us);
+    if (context->hw_alloc) {
+        context->timer_cb = callback;
+        esp_timer_start_once(context->hw_alloc->timer, us);
+    }
     common_hal_mcu_enable_interrupts();
 }
 
@@ -156,35 +225,25 @@ static IRAM_ATTR esp_err_t xgpio_set_level(gpio_num_t gpio_num, uint32_t level) 
 }
 
 static IRAM_ATTR void pin_rx(busio_jacdac_obj_t *context) {
-    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pinnum], PIN_FUNC_GPIO);
-    REG_SET_BIT(GPIO_PIN_MUX_REG[context->pinnum], FUN_PU);
-    PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[context->pinnum]);
-    GPIO.enable_w1tc = (0x1 << context->pinnum);
-    REG_WRITE(GPIO_FUNC0_OUT_SEL_CFG_REG + (context->pinnum * 4), SIG_GPIO_OUT_IDX);
-    gpio_matrix_in(context->pinnum, uart_periph_signal[context->uart_num].rx_sig, 0);
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pin_num], PIN_FUNC_GPIO);
+    REG_SET_BIT(GPIO_PIN_MUX_REG[context->pin_num], FUN_PU);
+    PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[context->pin_num]);
+    GPIO.enable_w1tc = (0x1 << context->pin_num);
+    REG_WRITE(GPIO_FUNC0_OUT_SEL_CFG_REG + (context->pin_num * 4), SIG_GPIO_OUT_IDX);
+    gpio_matrix_in(context->pin_num, uart_periph_signal[context->uart_num].rx_sig, 0);
 }
 
 static IRAM_ATTR void pin_tx(busio_jacdac_obj_t *context) {
     gpio_matrix_in(GPIO_FUNC_IN_HIGH, uart_periph_signal[context->uart_num].rx_sig, 0); // context->uart_hw
-    GPIO.pin[context->pinnum].int_type = GPIO_PIN_INTR_DISABLE;
-    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pinnum], PIN_FUNC_GPIO);
-    gpio_set_level(context->pinnum, 1);
-    gpio_matrix_out(context->pinnum, uart_periph_signal[context->uart_num].tx_sig, 0, 0);
+    GPIO.pin[context->pin_num].int_type = GPIO_PIN_INTR_DISABLE;
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pin_num], PIN_FUNC_GPIO);
+    gpio_set_level(context->pin_num, 1);
+    gpio_matrix_out(context->pin_num, uart_periph_signal[context->uart_num].tx_sig, 0, 0);
 }
 
 int common_hal_busio_jacdac_wait_high(busio_jacdac_obj_t *context) {
     // we already started RX at this point
     return 0;
-}
-
-void common_hal_busio_jacdac_cancel(busio_jacdac_obj_t *context) {
-    context->uart_hw->int_clr.val = 0xffffffff;
-    context->uart_hw->int_ena.val = UART_BRK_DET_INT_ENA;
-    context->seen_low = 0;
-    context->rx_len = context->tx_len = 0;
-    context->fifo_buf = NULL;
-    context->rx_ended = 0;
-    pin_rx(context);
 }
 
 static IRAM_ATTR void fill_fifo(busio_jacdac_obj_t *context) {
@@ -244,6 +303,17 @@ static IRAM_ATTR void read_fifo(busio_jacdac_obj_t *context, int force) {
     }
 }
 
+void common_hal_busio_jacdac_cancel(busio_jacdac_obj_t *context) {
+    context->uart_hw->int_clr.val = 0xffffffff;
+    context->uart_hw->int_ena.val = UART_BRK_DET_INT_ENA;
+    context->seen_low = 0;
+    context->rx_len = context->tx_len = 0;
+    context->fifo_buf = NULL;
+    context->rx_ended = 0;
+    read_fifo(context, 1);
+    pin_rx(context);
+}
+
 #define END_RX_FLAGS (UART_RXFIFO_TOUT_INT_ST | UART_BRK_DET_INT_ST | UART_FRM_ERR_INT_ST)
 
 static IRAM_ATTR void start_bg_rx(busio_jacdac_obj_t *context) {
@@ -256,6 +326,10 @@ static IRAM_ATTR void start_bg_rx(busio_jacdac_obj_t *context) {
 }
 
 static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context) {
+    if (!context->hw_alloc) {
+        return;
+    }
+
     uart_dev_t *uart_reg = context->uart_hw;
 
     uint32_t uart_intr_status = uart_reg->int_st.val;
@@ -298,7 +372,7 @@ static IRAM_ATTR NOINLINE_ATTR void probe_and_set(volatile uint32_t *oe, volatil
 static void tx_race(busio_jacdac_obj_t *context) {
     // don't reconnect the pin in the middle of the low-pulse
     int timeout = 50000;
-    while (timeout-- > 0 && gpio_get_level(context->pinnum) == 0) {
+    while (timeout-- > 0 && gpio_get_level(context->pin_num) == 0) {
         ;
     }
     pin_rx(context);
@@ -317,20 +391,20 @@ IRAM_ATTR int common_hal_busio_jacdac_start_tx(busio_jacdac_obj_t *context, cons
         jd_panic();
     }
 
-    if (context->seen_low || context->uart_hw->status.rxfifo_cnt != 0) {
+    if (!context->hw_alloc || context->seen_low || context->uart_hw->int_raw.brk_det) {
+        LOG("seen low %p %d %d", context->hw_alloc, context->seen_low, context->uart_hw->int_raw.brk_det);
         return -1;
     }
 
     common_hal_mcu_disable_interrupts();
 
     gpio_matrix_in(GPIO_FUNC_IN_HIGH, uart_periph_signal[context->uart_num].rx_sig, 0); // context->uart_hw
-    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pinnum], PIN_FUNC_GPIO);
-    GPIO.out_w1tc = (1 << context->pinnum);
+    PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[context->pin_num], PIN_FUNC_GPIO);
+    GPIO.out_w1tc = (1 << context->pin_num);
 
+    probe_and_set(&GPIO.enable_w1ts, &GPIO.in, 1 << context->pin_num);
 
-    probe_and_set(&GPIO.enable_w1ts, &GPIO.in, 1 << context->pinnum);
-
-    if (!(GPIO.enable & (1 << context->pinnum))) {
+    if (!(GPIO.enable & (1 << context->pin_num))) {
         // the line went down in the meantime
         tx_race(context);
         common_hal_mcu_enable_interrupts();
@@ -338,12 +412,11 @@ IRAM_ATTR int common_hal_busio_jacdac_start_tx(busio_jacdac_obj_t *context, cons
     }
 
     target_wait_us(12); // low pulse is 14us with wait of 12 here
-    xgpio_set_level(context->pinnum, 1);
+    xgpio_set_level(context->pin_num, 1);
 
     target_wait_us(40); // ~55us from end of low pulse to start bit
 
     pin_tx(context);
-
 
     context->fifo_buf = (uint8_t *)data;
     context->tx_len = numbytes;
