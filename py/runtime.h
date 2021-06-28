@@ -30,6 +30,7 @@
 
 #include "py/mpstate.h"
 #include "py/pystack.h"
+#include "py/dmesg.h"
 
 #include "supervisor/linker.h"
 

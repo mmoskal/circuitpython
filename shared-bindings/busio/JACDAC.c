@@ -41,6 +41,7 @@
 #include "py/objproperty.h"
 #include "py/runtime.h"
 #include "supervisor/shared/translate.h"
+#include "supervisor/shared/tick.h"
 
 #include "common-hal/busio/JACDAC.h"
 
@@ -75,6 +76,8 @@ STATIC mp_obj_t busio_jacdac_make_new(const mp_obj_type_t *type, size_t n_args, 
     const mcu_pin_obj_t *pin = validate_obj_is_free_pin(args[ARG_pin].u_obj);
 
     common_hal_busio_jacdac_construct(self, pin);
+
+    supervisor_enable_tick();
 
     return (mp_obj_t)self;
 }
@@ -401,8 +404,13 @@ const mp_obj_type_t busio_jacdac_type = {
 //
 //
 
-#define ERROR(...) do {} while (0)
-#define LOG(...) do {} while (0)
+// #define JD_LOG(...) do {} while (0)
+#define JD_LOG DMESG
+#define ERROR(msg, ...)                                                                            \
+    do {                                                                                           \
+        JD_LOG("JD-ERROR: " msg,##__VA_ARGS__);                                                   \
+    } while (0)
+#define LOG JD_LOG
 
 #define JD_STATUS_RX_ACTIVE 0x01
 #define JD_STATUS_TX_ACTIVE 0x02
@@ -487,12 +495,13 @@ static void flush_tx_queue(busio_jacdac_obj_t *ctx) {
     jd_linked_frame_t *f = ctx->base.txQueue;
     if (!f) {
         tx_done(ctx);
+        LOG("nothing to flush");
         return;
     }
 
     signal_write(1);
     if (common_hal_busio_jacdac_start_tx(ctx, &f->frame, JD_FRAME_SIZE(&f->frame)) < 0) {
-        // ERROR("race on TX");
+        ERROR("race on TX");
         // jd_diagnostics.bus_lo_error++;
         tx_done(ctx);
         return;
