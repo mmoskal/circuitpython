@@ -95,5 +95,6 @@ extern int common_hal_busio_jacdac_start_tx(busio_jacdac_obj_t *context, const v
 extern void common_hal_busio_jacdac_start_rx(busio_jacdac_obj_t *context, void *data, uint32_t maxbytes);
 extern void common_hal_busio_jacdac_cancel(busio_jacdac_obj_t *context);
 extern int common_hal_busio_jacdac_wait_high(busio_jacdac_obj_t *context);
+extern void common_hal_busio_jacdac_force_read(busio_jacdac_obj_t *context);
 
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BUSIO_JACDAC_H

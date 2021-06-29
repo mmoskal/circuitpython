@@ -42,14 +42,15 @@
 #include "driver/gpio.h"
 #include "components/driver/include/driver/periph_ctrl.h"
 
+// #define PIN_LOG_0 GPIO_NUM_3
+// #define PIN_LOG_1 GPIO_NUM_4
+
 #define LOG NOLOG
 // #define LOG DMESG
 
 #define UART_EMPTY_THRESH_DEFAULT (10)
 #define UART_FULL_THRESH_DEFAULT (120)
 #define UART_TOUT_THRESH_DEFAULT (10)
-
-#define FIFO_BYTE context->uart_hw->ahb_fifo.rw_byte
 
 #define NUM_HW_ALLOC 2
 
@@ -58,6 +59,13 @@ static busio_jacdac_hw_alloc_t jd_hw_alloc[NUM_HW_ALLOC];
 static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context);
 
 static void log_pin_pulse(int pinid, int numpulses) {
+    #ifdef PIN_LOG_0
+    uint32_t mask = pinid == 0 ? 1 << PIN_LOG_0 : 1 << PIN_LOG_1;
+    while (numpulses--) {
+        GPIO.out_w1ts = mask;
+        GPIO.out_w1tc = mask;
+    }
+    #endif
 }
 
 static void jd_timer(busio_jacdac_obj_t *context) {
@@ -93,7 +101,7 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
         mp_raise_ValueError(translate("All UART peripherals are in use"));
     }
 
-    DMESG("Jacdac on UART%d IO%d", context->uart_num, context->pin_num);
+    DMESG("Jacdac on UART%d IO%d", context->uart_num, pin->number);
 
     context->uart_hw = UART_LL_GET_HW(context->uart_num);
 
@@ -158,6 +166,11 @@ void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pi
 
     // gpio_set_pull_mode(context->pin_num, GPIO_PULLUP_ONLY);
     // gpio_set_direction(context->pin_num, GPIO_MODE_INPUT);
+
+    #ifdef PIN_LOG_0
+    gpio_set_direction(PIN_LOG_0, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_LOG_1, GPIO_MODE_OUTPUT);
+    #endif
 
     common_hal_busio_jacdac_cancel(context);
 }
@@ -256,9 +269,7 @@ static IRAM_ATTR void fill_fifo(busio_jacdac_obj_t *context) {
         space = context->tx_len;
     }
 
-    for (int i = 0; i < space; i++) {
-        FIFO_BYTE = context->fifo_buf[i];
-    }
+    uart_ll_write_txfifo(context->uart_hw, context->fifo_buf, space);
 
     context->fifo_buf += space;
     context->tx_len -= space;
@@ -287,18 +298,22 @@ static IRAM_ATTR void read_fifo(busio_jacdac_obj_t *context, int force) {
     if (rx_fifo_len) {
         LOG("rxfifo %d", rx_fifo_len);
         int n = rx_fifo_len;
+        int needs_rst = 0;
         if (n > context->rx_len) {
             n = context->rx_len;
+            needs_rst = 1;
         }
 
-        context->rx_len -= n;
-        rx_fifo_len -= n;
-
-        while (n-- > 0) {
-            *context->fifo_buf++ = FIFO_BYTE;
+        if (n) {
+            context->rx_len -= n;
+            rx_fifo_len -= n;
+            uart_ll_read_rxfifo(uart_reg, context->fifo_buf, n);
+            context->fifo_buf += n;
         }
-        while (rx_fifo_len-- > 0) {
-            (void)FIFO_BYTE;
+
+        // and drop the rest of data
+        if (needs_rst) {
+            uart_ll_rxfifo_rst(uart_reg);
         }
     }
 }
@@ -312,6 +327,11 @@ void common_hal_busio_jacdac_cancel(busio_jacdac_obj_t *context) {
     context->rx_ended = 0;
     read_fifo(context, 1);
     pin_rx(context);
+    log_pin_pulse(1, 1);
+}
+
+void common_hal_busio_jacdac_force_read(busio_jacdac_obj_t *context) {
+    read_fifo(context, 1);
 }
 
 #define END_RX_FLAGS (UART_RXFIFO_TOUT_INT_ST | UART_BRK_DET_INT_ST | UART_FRM_ERR_INT_ST)
@@ -326,6 +346,8 @@ static IRAM_ATTR void start_bg_rx(busio_jacdac_obj_t *context) {
 }
 
 static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context) {
+    log_pin_pulse(0, 1);
+
     if (!context->hw_alloc) {
         return;
     }
@@ -340,7 +362,7 @@ static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context) {
     read_fifo(context, 0);
 
     if (!context->seen_low && (uart_intr_status & UART_BRK_DET_INT_ST)) {
-        log_pin_pulse(0, 1);
+        log_pin_pulse(0, 2);
         start_bg_rx(context);
     } else if (uart_intr_status & UART_TX_BRK_DONE_INT_ST) {
         uart_reg->conf0.txd_brk = 0;
@@ -350,13 +372,13 @@ static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context) {
         uart_reg->int_ena.txfifo_empty = 0;
         fill_fifo(context);
     } else if (uart_intr_status & END_RX_FLAGS) {
-        log_pin_pulse(0, 3);
+        log_pin_pulse(0, 4);
         LOG("end, rx=%d", context->rx_len);
         context->data_left = context->rx_len;
         int had_buf = context->fifo_buf != NULL;
         common_hal_busio_jacdac_cancel(context);
         if (had_buf) {
-            log_pin_pulse(0, 2);
+            log_pin_pulse(0, 5);
             busio_jacdac_rx_completed(context);
         } else {
             context->rx_ended = 1;
@@ -441,7 +463,7 @@ void common_hal_busio_jacdac_start_rx(busio_jacdac_obj_t *context, void *data, u
         jd_panic();
     }
 
-    log_pin_pulse(0, 1);
+    log_pin_pulse(0, 3);
 
     context->fifo_buf = data;
     context->rx_len = maxbytes;
@@ -449,13 +471,13 @@ void common_hal_busio_jacdac_start_rx(busio_jacdac_obj_t *context, void *data, u
 
     uart_flush_rx(context);
 
-    log_pin_pulse(0, 2);
+    // log_pin_pulse(0, 2);
 
     if (context->rx_ended) {
         context->rx_ended = 0;
         context->rx_len = 0;
         context->fifo_buf = NULL;
-        log_pin_pulse(0, 2);
+        // log_pin_pulse(0, 2);
         busio_jacdac_rx_completed(context);
     }
 }

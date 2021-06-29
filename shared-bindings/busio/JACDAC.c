@@ -306,7 +306,7 @@ STATIC mp_obj_t busio_jacdac_receive(mp_obj_t self_) {
     }
 
     if (lnk) {
-        res = mp_obj_new_bytes((void *)&lnk->frame, lnk->frame.service_size + 16);
+        res = mp_obj_new_bytearray(lnk->frame.service_size + 16, (void *)&lnk->frame);
         if (jd_shift_frame(&lnk->frame) == 0) {
             m_free(lnk);
             self->frameToSplit = NULL;
@@ -410,7 +410,7 @@ const mp_obj_type_t busio_jacdac_type = {
     do {                                                                                           \
         JD_LOG("JD-ERROR: " msg,##__VA_ARGS__);                                                   \
     } while (0)
-#define LOG JD_LOG
+#define LOG NOLOG
 
 #define JD_STATUS_RX_ACTIVE 0x01
 #define JD_STATUS_TX_ACTIVE 0x02
@@ -495,7 +495,7 @@ static void flush_tx_queue(busio_jacdac_obj_t *ctx) {
     jd_linked_frame_t *f = ctx->base.txQueue;
     if (!f) {
         tx_done(ctx);
-        LOG("nothing to flush");
+        JD_LOG("nothing to flush");
         return;
     }
 
@@ -545,6 +545,7 @@ static void rx_timeout(busio_jacdac_obj_t *ctx) {
 }
 
 static void setup_rx_timeout(busio_jacdac_obj_t *ctx) {
+    common_hal_busio_jacdac_force_read(ctx);
     uint32_t *p = (uint32_t *)ctx->base.rxFrame;
     if (p[0] == 0 && p[1] == 0) {
         rx_timeout(ctx); // didn't get any data after lo-pulse
