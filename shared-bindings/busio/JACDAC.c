@@ -545,18 +545,22 @@ static void rx_timeout(busio_jacdac_obj_t *ctx) {
 }
 
 static void setup_rx_timeout(busio_jacdac_obj_t *ctx) {
-    common_hal_busio_jacdac_force_read(ctx);
-    uint32_t *p = (uint32_t *)ctx->base.rxFrame;
-    if (p[0] == 0 && p[1] == 0) {
-        rx_timeout(ctx); // didn't get any data after lo-pulse
-    } else {
-        // got the size - set timeout for whole packet
-        common_hal_busio_jacdac_set_timer(ctx, JD_FRAME_SIZE(ctx->base.rxFrame) * 12 + 60, rx_timeout);
+    common_hal_mcu_disable_interrupts();
+    if (ctx->base.status & JD_STATUS_RX_ACTIVE) {
+        common_hal_busio_jacdac_force_read(ctx);
+        uint32_t *p = (uint32_t *)ctx->base.rxFrame;
+        if (p[0] == 0 && p[1] == 0) {
+            rx_timeout(ctx); // didn't get any data after lo-pulse
+        } else {
+            // got the size - set timeout for whole packet
+            common_hal_busio_jacdac_set_timer(ctx, JD_FRAME_SIZE(ctx->base.rxFrame) * 12 + 560, rx_timeout);
+        }
     }
+    common_hal_mcu_enable_interrupts();
 }
 
 void busio_jacdac_line_falling(busio_jacdac_obj_t *ctx) {
-    LOG("line fall");
+    // JD_LOG("line fall");
     // log_pin_set(1, 1);
     pulse_log_pin();
     signal_read(1);
@@ -587,8 +591,14 @@ void busio_jacdac_line_falling(busio_jacdac_obj_t *ctx) {
     common_hal_busio_jacdac_start_rx(ctx, ctx->base.rxFrame, sizeof(*ctx->base.rxFrame));
     // log_pin_set(1, 0);
 
+    // if we're not active after start_rx, it means the rx already finished
+    if (!(ctx->base.status & JD_STATUS_RX_ACTIVE)) {
+        return;
+    }
+
     // 200us max delay according to spec, +50us to get the first 4 bytes of data
     common_hal_busio_jacdac_set_timer(ctx, 250, setup_rx_timeout);
+    // JD_LOG("%d af rx t/o", (int)esp_timer_get_time());
 
     // common_hal_mcu_enable_interrupts();
 }

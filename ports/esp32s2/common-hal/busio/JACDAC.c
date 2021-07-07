@@ -223,7 +223,10 @@ void common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us,
     common_hal_mcu_disable_interrupts();
     if (context->hw_alloc) {
         context->timer_cb = callback;
-        esp_timer_start_once(context->hw_alloc->timer, us);
+        esp_timer_stop(context->hw_alloc->timer);
+        if (callback) {
+            esp_timer_start_once(context->hw_alloc->timer, us);
+        }
     }
     common_hal_mcu_enable_interrupts();
 }
@@ -373,9 +376,9 @@ static IRAM_ATTR void uart_isr(busio_jacdac_obj_t *context) {
         fill_fifo(context);
     } else if (uart_intr_status & END_RX_FLAGS) {
         log_pin_pulse(0, 4);
-        LOG("end, rx=%d", context->rx_len);
         context->data_left = context->rx_len;
         int had_buf = context->fifo_buf != NULL;
+        LOG("%d end, rx=%d %d", (int)esp_timer_get_time(), context->rx_len, had_buf);
         common_hal_busio_jacdac_cancel(context);
         if (had_buf) {
             log_pin_pulse(0, 5);
