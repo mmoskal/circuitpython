@@ -1,11 +1,12 @@
 #include "dmesg.h"
 #include <string.h>
 #include <stddef.h>
+
+#if DEVICE_DMESG_BUFFER_SIZE > 0
+
 #include "shared-bindings/microcontroller/__init__.h"
 #define target_disable_irq common_hal_mcu_disable_interrupts
 #define target_enable_irq common_hal_mcu_enable_interrupts
-
-#if DEVICE_DMESG_BUFFER_SIZE > 0
 
 struct CodalLogStore codalLogStore;
 

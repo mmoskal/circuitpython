@@ -6,7 +6,9 @@
 
 #define NOLOG(...) ((void)0)
 
+#ifndef __APPLE__
 #define DEVICE_DMESG_BUFFER_SIZE 1024
+#endif
 
 #if DEVICE_DMESG_BUFFER_SIZE > 0
 
