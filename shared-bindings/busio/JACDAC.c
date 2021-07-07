@@ -553,7 +553,7 @@ static void setup_rx_timeout(busio_jacdac_obj_t *ctx) {
             rx_timeout(ctx); // didn't get any data after lo-pulse
         } else {
             // got the size - set timeout for whole packet
-            common_hal_busio_jacdac_set_timer(ctx, JD_FRAME_SIZE(ctx->base.rxFrame) * 12 + 560, rx_timeout);
+            common_hal_busio_jacdac_set_timer(ctx, JD_FRAME_SIZE(ctx->base.rxFrame) * 12 + 60, rx_timeout);
         }
     }
     common_hal_mcu_enable_interrupts();
