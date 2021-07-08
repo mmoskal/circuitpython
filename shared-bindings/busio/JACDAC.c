@@ -342,43 +342,23 @@ static uint32_t jd_hash(uint8_t *buf, size_t length, int bits) {
 }
 
 
-STATIC mp_obj_t busio_jacdac_hash(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
-    enum { ARG_buffer };
-    static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_buffer,     MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj = MP_OBJ_NULL} },
-    };
-
-    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(pos_args[0]);
-    check_for_deinit(self);
-
-    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
-    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
-
+STATIC mp_obj_t busio_jacdac_hash(mp_obj_t bufobj, mp_obj_t numbits) {
     // setup buffer
     mp_buffer_info_t bufinfo;
-    mp_get_buffer_raise(args[ARG_buffer].u_obj, &bufinfo, MP_BUFFER_READ);
-    int32_t start = 0;
-    size_t length = bufinfo.len;
-    normalize_buffer_bounds(&start, INT_MAX, &length);
+    mp_get_buffer_raise(bufobj, &bufinfo, MP_BUFFER_READ);
 
-    // empty buffer
-    if (length == 0) {
-        return 0;
-    }
+    uint32_t h = jd_hash(((uint8_t *)bufinfo.buf), bufinfo.len, mp_obj_get_int(numbits));
 
-    uint32_t h = jd_hash(((uint8_t *)bufinfo.buf), length, 30);
+    return mp_obj_new_int_from_uint(h);
 
-    vstr_t vstr;
-    vstr_init_len(&vstr, 4);
-
+    /*
     vstr.buf[0] = 0x41 + h % 26;
     vstr.buf[1] = 0x41 + (h / 26) % 26;
     vstr.buf[2] = 0x30 + (h / (26 * 26)) % 10;
     vstr.buf[3] = 0x30 + (h / (26 * 26 * 10)) % 10;
-
-    return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
+    */
 }
-MP_DEFINE_CONST_FUN_OBJ_KW(busio_jacdac_hash_obj, 2, busio_jacdac_hash);
+MP_DEFINE_CONST_FUN_OBJ_2(busio_jacdac_hash_obj, busio_jacdac_hash);
 
 
 STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
