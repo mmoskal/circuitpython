@@ -198,6 +198,7 @@ static void jd_deinit_hw_alloc(busio_jacdac_hw_alloc_t *hw_alloc) {
 }
 
 void jacdac_reset() {
+    DMESG("jacdac_reset");
     for (int i = 0; i < NUM_HW_ALLOC; ++i) {
         jd_deinit_hw_alloc(&jd_hw_alloc[i]);
     }
@@ -216,7 +217,7 @@ void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context) {
 }
 
 bool common_hal_busio_jacdac_deinited(busio_jacdac_obj_t *context) {
-    return context->hw_alloc == NULL;
+    return context->hw_alloc == NULL || context->hw_alloc->timer == NULL;
 }
 
 void common_hal_busio_jacdac_set_timer(busio_jacdac_obj_t *context, uint32_t us, busio_jacdac_base_callback_t callback) {

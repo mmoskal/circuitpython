@@ -604,6 +604,9 @@ void busio_jacdac_line_falling(busio_jacdac_obj_t *ctx) {
 }
 
 static void flush_rx(busio_jacdac_obj_t *ctx) {
+    if (common_hal_busio_jacdac_deinited(ctx)) {
+        return;
+    }
     for (;;) {
         jd_frame_t frame;
         uint8_t *data = (uint8_t *)&frame;
