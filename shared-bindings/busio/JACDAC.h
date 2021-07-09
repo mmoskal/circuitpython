@@ -84,6 +84,9 @@ extern void busio_jacdac_rx_completed(busio_jacdac_obj_t *ctx);
 extern void busio_jacdac_line_falling(busio_jacdac_obj_t *ctx);
 extern void busio_jacdac_tx_completed(busio_jacdac_obj_t *ctx);
 
+extern uint64_t busio_jacdac_device_id(void);
+
+
 // standard MP stuff
 extern void common_hal_busio_jacdac_construct(busio_jacdac_obj_t *context, const mcu_pin_obj_t *pin);
 extern void common_hal_busio_jacdac_deinit(busio_jacdac_obj_t *context);

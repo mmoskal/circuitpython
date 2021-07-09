@@ -31,6 +31,7 @@
 #include "shared-bindings/util.h"
 #include "shared-bindings/time/__init__.h"
 #include "shared-bindings/microcontroller/__init__.h"
+#include "shared-bindings/microcontroller/Processor.h"
 #include "shared-bindings/random/__init__.h"
 
 #include "lib/utils/buffer_helper.h"
@@ -317,6 +318,18 @@ STATIC mp_obj_t busio_jacdac_receive(mp_obj_t self_) {
 }
 MP_DEFINE_CONST_FUN_OBJ_1(busio_jacdac_receive_obj, busio_jacdac_receive);
 
+//|     def id(self) -> bytearray:
+//|         """Get 64 bit device identifier."""
+//|         ...
+//|
+STATIC mp_obj_t busio_jacdac_uid(mp_obj_t self_) {
+    busio_jacdac_base_obj_t *self = MP_OBJ_TO_PTR(self_);
+    check_for_deinit(self);
+    uint64_t id = busio_jacdac_device_id();
+    return mp_obj_new_bytearray(sizeof(id), &id);
+}
+MP_DEFINE_CONST_FUN_OBJ_1(busio_jacdac_uid_obj, busio_jacdac_uid);
+
 // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 static uint32_t hash_fnv1(const void *data, unsigned len) {
     const uint8_t *d = (const uint8_t *)data;
@@ -325,6 +338,24 @@ static uint32_t hash_fnv1(const void *data, unsigned len) {
         h = (h * 0x1000193) ^ *d++;
     }
     return h;
+}
+
+uint64_t busio_jacdac_device_id(void) {
+    uint8_t raw_id[COMMON_HAL_MCU_PROCESSOR_UID_LENGTH];
+    int len = COMMON_HAL_MCU_PROCESSOR_UID_LENGTH;
+    common_hal_mcu_processor_get_uid(raw_id);
+    #if COMMON_HAL_MCU_PROCESSOR_UID_LENGTH <= 8
+    uint8_t dev_id[8] = {0};
+    dev_id[0] = 0xfe;
+    dev_id[7] = 0xff;
+    memcpy(dev_id + (8 - len) / 2, raw_id, len);
+    uint64_t res;
+    memcpy(&res, dev_id, sizeof(res));
+    return res;
+    #else
+    return ((uint64_t)hash_fnv1(raw_id, len) << 32)
+           | ((uint64_t)hash_fnv1(raw_id + 1, len - 1));
+    #endif
 }
 
 static uint32_t jd_hash(uint8_t *buf, size_t length, int bits) {
@@ -369,6 +400,7 @@ STATIC const mp_rom_map_elem_t busio_jacdac_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_send),     MP_ROM_PTR(&busio_jacdac_send_obj) },
     { MP_ROM_QSTR(MP_QSTR_receive),  MP_ROM_PTR(&busio_jacdac_receive_obj) },
     { MP_ROM_QSTR(MP_QSTR_hash),  MP_ROM_PTR(&busio_jacdac_hash_obj) },
+    { MP_ROM_QSTR(MP_QSTR_uid),     MP_ROM_PTR(&busio_jacdac_uid_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(busio_jacdac_locals_dict, busio_jacdac_locals_dict_table);
 
