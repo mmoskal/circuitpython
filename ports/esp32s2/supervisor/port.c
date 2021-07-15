@@ -41,6 +41,7 @@
 #include "common-hal/busio/I2C.h"
 #include "common-hal/busio/SPI.h"
 #include "common-hal/busio/UART.h"
+#include "common-hal/busio/JACDAC.h"
 #include "common-hal/dualbank/__init__.h"
 #include "common-hal/ps2io/Ps2.h"
 #include "common-hal/pulseio/PulseIn.h"
@@ -189,6 +190,7 @@ void reset_port(void) {
     i2c_reset();
     spi_reset();
     uart_reset();
+    jacdac_reset();
     #endif
 
     #if defined(CIRCUITPY_COUNTIO) || defined(CIRCUITPY_ROTARYIO)

@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2016 Scott Shawcroft
+ * Copyright (c) 2020 J Devine, M Lambrichts
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,29 +24,56 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
-#define MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+#ifndef MICROPY_INCLUDED_NRF_COMMON_HAL_BUSIO_JACDAC_H
+#define MICROPY_INCLUDED_NRF_COMMON_HAL_BUSIO_JACDAC_H
 
+#include "common-hal/microcontroller/Pin.h"
 #include "py/obj.h"
 
-#include "shared-bindings/microcontroller/Pin.h"  // for the pin definitions
+#include "nrfx_uarte.h"
+#include "nrf/timers.h"
 
-extern const mp_obj_dict_t board_module_globals;
+#define JD_POOL_SIZE 20
+#define JD_RX_SIZE 10
+#define JD_TX_SIZE 10
 
-mp_obj_t common_hal_board_get_i2c(void);
-mp_obj_t common_hal_board_create_i2c(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_i2c_obj);
 
-mp_obj_t common_hal_board_get_spi(void);
-mp_obj_t common_hal_board_create_spi(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_spi_obj);
 
-mp_obj_t common_hal_board_get_uart(void);
-mp_obj_t common_hal_board_create_uart(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_uart_obj);
 
-mp_obj_t common_hal_board_get_jacdac(void);
-mp_obj_t common_hal_board_create_jacdac(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_jacdac_obj);
+typedef struct busio_jacdac_obj {
+    mp_obj_base_t base;
+    uint8_t pin;
+    uint16_t status;
 
-#endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+    nrfx_uarte_t *uarte;
+    nrfx_timer_t *timer;
+
+    void (*tim_cb)(struct busio_jacdac_obj *);
+
+    jd_frame_t *buffer_pool[JD_POOL_SIZE];
+    jd_frame_t *rx_queue[JD_RX_SIZE];
+    jd_frame_t *tx_queue[JD_TX_SIZE];
+
+    jd_frame_t *rx_buffer;
+    jd_frame_t *tx_buffer;
+} busio_jacdac_obj_t;
+
+typedef void (*cb_t)(busio_jacdac_obj_t *);
+
+/*
+typedef struct {
+    uint32_t bus_state;
+    uint32_t bus_lo_error;
+    uint32_t bus_uart_error;
+    uint32_t bus_timeout_error;
+    uint32_t packets_sent;
+    uint32_t packets_received;
+    uint32_t packets_dropped;
+} jd_diagnostics_t;
+jd_diagnostics_t *jd_get_diagnostics(void);
+*/
+
+void jacdac_reset(void);
+
+
+#endif // MICROPY_INCLUDED_NRF_COMMON_HAL_BUSIO_JACDAC_H

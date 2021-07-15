@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2016 Scott Shawcroft
+ * Copyright (c) 2020 Scott Shawcroft for Adafruit Industries
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,29 +24,29 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
-#define MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+#include "supervisor/board.h"
+#include "mpconfigboard.h"
+#include "shared-bindings/microcontroller/Pin.h"
 
-#include "py/obj.h"
+void board_init(void) {
+    // USB
+    common_hal_never_reset_pin(&pin_GPIO19);
+    common_hal_never_reset_pin(&pin_GPIO20);
 
-#include "shared-bindings/microcontroller/Pin.h"  // for the pin definitions
+    // Debug UART
+    #ifdef DEBUG
+    common_hal_never_reset_pin(&pin_GPIO43);
+    common_hal_never_reset_pin(&pin_GPIO44);
+    #endif /* DEBUG */
+}
 
-extern const mp_obj_dict_t board_module_globals;
+bool board_requests_safe_mode(void) {
+    return false;
+}
 
-mp_obj_t common_hal_board_get_i2c(void);
-mp_obj_t common_hal_board_create_i2c(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_i2c_obj);
+void reset_board(void) {
 
-mp_obj_t common_hal_board_get_spi(void);
-mp_obj_t common_hal_board_create_spi(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_spi_obj);
+}
 
-mp_obj_t common_hal_board_get_uart(void);
-mp_obj_t common_hal_board_create_uart(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_uart_obj);
-
-mp_obj_t common_hal_board_get_jacdac(void);
-mp_obj_t common_hal_board_create_jacdac(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_jacdac_obj);
-
-#endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+void board_deinit(void) {
+}

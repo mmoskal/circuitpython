@@ -339,6 +339,7 @@ extern const struct _mp_obj_module_t board_module;
 #define BOARD_I2C (defined(DEFAULT_I2C_BUS_SDA) && defined(DEFAULT_I2C_BUS_SCL))
 #define BOARD_SPI (defined(DEFAULT_SPI_BUS_SCK) && defined(DEFAULT_SPI_BUS_MISO) && defined(DEFAULT_SPI_BUS_MOSI))
 #define BOARD_UART (defined(DEFAULT_UART_BUS_RX) && defined(DEFAULT_UART_BUS_TX))
+#define BOARD_JACDAC (defined(DEFAULT_JACDAC_BUS))
 
 // I2C and SPI are always allocated off the heap.
 
@@ -346,6 +347,12 @@ extern const struct _mp_obj_module_t board_module;
 #define BOARD_UART_ROOT_POINTER mp_obj_t shared_uart_bus;
 #else
 #define BOARD_UART_ROOT_POINTER
+#endif
+
+#if BOARD_JACDAC
+#define BOARD_JACDAC_ROOT_POINTER mp_obj_t shared_jacdac_bus;
+#else
+#define BOARD_JACDAC_ROOT_POINTER
 #endif
 
 #else
@@ -956,6 +963,7 @@ struct _supervisor_allocation_node;
     GAMEPAD_ROOT_POINTERS \
     mp_obj_t pew_singleton; \
     BOARD_UART_ROOT_POINTER \
+    BOARD_JACDAC_ROOT_POINTER \
     FLASH_ROOT_POINTERS \
     MEMORYMONITOR_ROOT_POINTERS \
         NETWORK_ROOT_POINTERS \

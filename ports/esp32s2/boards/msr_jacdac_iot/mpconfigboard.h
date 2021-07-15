@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2016 Scott Shawcroft
+ * Copyright (c) 2019 Scott Shawcroft for Adafruit Industries
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,29 +24,18 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
-#define MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+// Micropython setup
 
-#include "py/obj.h"
+#define MICROPY_HW_BOARD_NAME       "Jacdac IoT 48"
+#define MICROPY_HW_MCU_NAME         "ESP32S2"
 
-#include "shared-bindings/microcontroller/Pin.h"  // for the pin definitions
+#define CIRCUITPY_RGB_STATUS_R             (&pin_GPIO8)
+#define CIRCUITPY_RGB_STATUS_G             (&pin_GPIO7)
+#define CIRCUITPY_RGB_STATUS_B             (&pin_GPIO6)
+#define CIRCUITPY_RGB_STATUS_INVERTED_PWM 1
 
-extern const mp_obj_dict_t board_module_globals;
+#define CIRCUITPY_BOOT_BUTTON (&pin_GPIO0)
 
-mp_obj_t common_hal_board_get_i2c(void);
-mp_obj_t common_hal_board_create_i2c(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_i2c_obj);
+#define BOARD_USER_SAFE_MODE_ACTION translate("pressing boot button at start up.\n")
 
-mp_obj_t common_hal_board_get_spi(void);
-mp_obj_t common_hal_board_create_spi(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_spi_obj);
-
-mp_obj_t common_hal_board_get_uart(void);
-mp_obj_t common_hal_board_create_uart(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_uart_obj);
-
-mp_obj_t common_hal_board_get_jacdac(void);
-mp_obj_t common_hal_board_create_jacdac(void);
-MP_DECLARE_CONST_FUN_OBJ_0(board_jacdac_obj);
-
-#endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H
+#define AUTORESET_DELAY_MS 500

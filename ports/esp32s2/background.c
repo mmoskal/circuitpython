@@ -39,6 +39,8 @@
 #include "common-hal/pulseio/PulseIn.h"
 #endif
 
+#include "shared-bindings/microcontroller/__init__.h"
+
 
 void port_background_task(void) {
     // Zero delay in case FreeRTOS wants to switch to something else.
@@ -46,6 +48,32 @@ void port_background_task(void) {
     #if CIRCUITPY_PULSEIO
     pulsein_background();
     #endif
+
+    if (codalLogStore.ptr) {
+        char *dmesgCopy = malloc(sizeof(codalLogStore));
+
+        uint32_t len;
+
+        common_hal_mcu_disable_interrupts();
+        len = codalLogStore.ptr;
+        memcpy(dmesgCopy, codalLogStore.buffer, len);
+        codalLogStore.ptr = 0;
+        codalLogStore.buffer[0] = 0;
+        common_hal_mcu_enable_interrupts();
+
+        if (len) {
+            if (dmesgCopy[len - 1] == '\n') {
+                len--;
+            }
+            dmesgCopy[len] = 0;
+            if (strchr(dmesgCopy, '\n')) {
+                ESP_LOGW("JD", "DMESG:\n%s", dmesgCopy);
+            } else {
+                ESP_LOGW("JD", "DMESG: %s", dmesgCopy);
+            }
+        }
+        free(dmesgCopy);
+    }
 }
 
 void port_start_background_task(void) {

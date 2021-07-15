@@ -19,6 +19,7 @@ set(MICROPY_SOURCE_PY
     ${MICROPY_PY_DIR}/builtinhelp.c
     ${MICROPY_PY_DIR}/builtinimport.c
     ${MICROPY_PY_DIR}/compile.c
+    ${MICROPY_PY_DIR}/dmesg.c
     ${MICROPY_PY_DIR}/emitbc.c
     ${MICROPY_PY_DIR}/emitcommon.c
     ${MICROPY_PY_DIR}/emitglue.c

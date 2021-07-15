@@ -52,6 +52,19 @@ void uart_reset(void) {
     }
 }
 
+static uint8_t used_uarts;
+bool uart_is_used(uart_port_t num) {
+    return uart_is_driver_installed(num) || (used_uarts & (1 << (int)num)) != 0;
+}
+
+void uart_mark_used(uart_port_t num, bool used) {
+    if (used) {
+        used_uarts |= (1 << (int)num);
+    } else {
+        used_uarts &= ~(1 << (int)num);
+    }
+}
+
 void common_hal_busio_uart_construct(busio_uart_obj_t *self,
     const mcu_pin_obj_t *tx, const mcu_pin_obj_t *rx,
     const mcu_pin_obj_t *rts, const mcu_pin_obj_t *cts,
@@ -86,13 +99,15 @@ void common_hal_busio_uart_construct(busio_uart_obj_t *self,
 
     self->uart_num = UART_NUM_MAX;
     for (uart_port_t num = 0; num < UART_NUM_MAX; num++) {
-        if (!uart_is_driver_installed(num)) {
+        if (!uart_is_used(num)) {
             self->uart_num = num;
         }
     }
     if (self->uart_num == UART_NUM_MAX) {
         mp_raise_ValueError(translate("All UART peripherals are in use"));
     }
+
+    // no need to call uart_mark_used() as we're installing driver
 
     uart_mode_t mode = UART_MODE_UART;
     uart_hw_flowcontrol_t flow_control = UART_HW_FLOWCTRL_DISABLE;

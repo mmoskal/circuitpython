@@ -45,5 +45,8 @@ typedef struct {
 } busio_uart_obj_t;
 
 void uart_reset(void);
+// Checks if UART is marked as used or has driver installed
+bool uart_is_used(uart_port_t num);
+void uart_mark_used(uart_port_t num, bool used);
 
 #endif // MICROPY_INCLUDED_ESP32S2_COMMON_HAL_BUSIO_UART_H
